@@ -10,7 +10,7 @@ args = ["-c", "export PYTHONPATH=/root/.local/lib/python3.12/site-packages:$PYTH
 
 [agent.env]
 HOME = "/root"
-GLM_API_KEY = "3d37cd7a46d3458788ca82d16ae9292b.iVA2QomSGucY3mwC"
+GLM_API_KEY = "${GLM_API_KEY}"
 
 [source]
 git = "https://github.com/nidhishgajjar/code-review-agent"
