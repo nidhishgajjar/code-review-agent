@@ -1,0 +1,27 @@
+# OpenHands configuration for the code review agent.
+# All models below are FREE — no payment required.
+
+# ─── Primary: Google Gemini (best free option) ───
+[llm]
+model = "gemini/gemini-2.5-flash"
+api_key = ""  # set via GEMINI_API_KEY env var
+temperature = 0.0
+max_output_tokens = 4096
+
+# ─── Triage: use a fast free model for PR prioritization ───
+[llm.draft_editor]
+model = "groq/llama-3.3-70b-versatile"
+
+[sandbox]
+base_container_image = "nikolaik/python-nodejs:python3.12-nodejs22"
+
+[agent]
+llm_config = "llm"
+
+# ─── Free Provider Quick Reference ───
+# Google AI Studio:  gemini/gemini-2.5-flash          (1M ctx, 500 req/day)
+# OpenRouter:        openrouter/qwen/qwen3-coder:free (262K ctx, 50 req/day)
+# Groq:             groq/llama-3.3-70b-versatile      (128K ctx, 1K req/day)
+# Cerebras:         cerebras/llama-3.3-70b             (128K ctx, 30 RPM)
+# DeepSeek:         deepseek/deepseek-coder-v2         (128K ctx, 10M tokens signup)
+# Mistral:          mistral/codestral-latest           (128K ctx, phone verify)

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-review-agent"
+version = "0.1.0"
+description = "AI-powered code review agent built on OpenHands"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openhands-ai>=0.37",
+    "PyGithub>=2.3",
+    "click>=8.1",
+    "rich>=13.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "python-dotenv>=1.0",
+    "httpx>=0.28",
+]
+
+[project.scripts]
+review-agent = "code_review_agent.cli:main"

@@ -1,0 +1,34 @@
+# ORB Cloud config for the stateful code review agent.
+# Code is cloned from GitHub to /agent/code.
+# Agent runs as persistent HTTP server with OpenHands.
+
+[agent]
+name = "code-review-agent"
+lang = "binary"
+entry = "/bin/bash"
+args = ["-c", "source /agent/code/.env_keys 2>/dev/null; export PYTHONPATH=/root/.local/lib/python3.12/site-packages:$PYTHONPATH; exec python3 /agent/code/code_review_agent/standalone.py"]
+
+[agent.env]
+HOME = "/root"
+
+[source]
+git = "https://github.com/nidhishgajjar/code-review-agent"
+branch = "main"
+
+[build]
+steps = [
+  "mkdir -p /agent/code/repos /agent/code/reviews",
+  "touch /agent/code/memory.md",
+  "pip install --break-system-packages --ignore-installed openhands-ai",
+]
+working_dir = "/agent/code"
+
+[backend]
+provider = "custom"
+
+[ports]
+expose = [8000]
+
+[resources]
+runtime = "8GB"
+disk = "16GB"

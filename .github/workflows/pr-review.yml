@@ -1,0 +1,26 @@
+# OpenHands PR Review — drop this into any repo's .github/workflows/
+# Triggers when a PR is labeled "review-this" or openhands-agent is requested as reviewer.
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [labeled, review_requested]
+
+jobs:
+  review:
+    if: >
+      github.event.label.name == 'review-this' ||
+      github.event.requested_reviewer.login == 'openhands-agent'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run OpenHands PR Review
+        uses: all-hands-ai/openhands-pr-review@v1
+        with:
+          llm-model: "anthropic/claude-sonnet-4-5-20250929"
+          llm-api-key: ${{ secrets.LLM_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
