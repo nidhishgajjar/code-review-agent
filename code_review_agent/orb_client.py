@@ -16,7 +16,9 @@ import httpx
 
 ORB_BASE = "https://api.orbcloud.dev"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_ORB_TOML_PATH = _PROJECT_ROOT / "orb.toml"
+# Use orb.local.toml (has real secrets), fall back to orb.toml
+_ORB_TOML_LOCAL = _PROJECT_ROOT / "orb.local.toml"
+_ORB_TOML_PATH = _ORB_TOML_LOCAL if _ORB_TOML_LOCAL.exists() else _PROJECT_ROOT / "orb.toml"
 _STANDALONE_PATH = Path(__file__).resolve().parent / "standalone.py"
 
 
