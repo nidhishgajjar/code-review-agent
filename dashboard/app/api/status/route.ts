@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { join } from "path";
 
 const ORB_API = "https://api.orbcloud.dev/v1";
 const ORB_KEY = process.env.ORB_API_KEY!;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN!;
 
-// Computer ID -> repo mapping (from manifest + first deploy)
+// The 10 deployed computers
 const COMPUTER_REPOS: Record<string, string> = {
   "9e29e918-617c-44cd-be79-345bcc427c8f": "NousResearch/hermes-agent",
   "f7bdfe87-3399-464b-926f-ae25ee6d5b8d": "All-Hands-AI/OpenHands",
@@ -18,6 +20,41 @@ const COMPUTER_REPOS: Record<string, string> = {
   "37815c4c-5d35-458f-986f-dec02470c427": "vllm-project/vllm",
 };
 
+const STARTED_AT = "2026-04-15T02:30:00Z";
+const DATA_DIR = "/opt/review-dashboard/data";
+const STATS_FILE = join(DATA_DIR, "stats.json");
+
+// Persistent stats on disk
+interface Stats {
+  total_samples: number;
+  sleeping_samples: number; // sum of sleeping agents per sample
+  running_samples: number; // sum of running agents per sample
+  total_reviews: number;
+  started_at: string;
+}
+
+function loadStats(): Stats {
+  try {
+    if (existsSync(STATS_FILE)) {
+      return JSON.parse(readFileSync(STATS_FILE, "utf-8"));
+    }
+  } catch {}
+  return {
+    total_samples: 0,
+    sleeping_samples: 0,
+    running_samples: 0,
+    total_reviews: 0,
+    started_at: STARTED_AT,
+  };
+}
+
+function saveStats(stats: Stats) {
+  try {
+    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2));
+  } catch {}
+}
+
 async function orbFetch(path: string) {
   const res = await fetch(`${ORB_API}${path}`, {
     headers: { Authorization: `Bearer ${ORB_KEY}` },
@@ -27,7 +64,6 @@ async function orbFetch(path: string) {
 }
 
 async function fetchRecentReviews() {
-  // Fetch recent comments by nidhishgajjar that start with "**Orb Code Review**"
   const res = await fetch(
     "https://api.github.com/search/issues?q=commenter:nidhishgajjar+%22Orb+Code+Review%22&sort=updated&order=desc&per_page=10",
     {
@@ -51,11 +87,6 @@ async function fetchRecentReviews() {
 
 export async function GET() {
   try {
-    // Fetch all computers
-    const computersData = await orbFetch("/computers");
-    const computers = computersData.computers || [];
-
-    // Fetch agent state for each known computer
     const agents: Array<{
       computer_id: string;
       short_id: string;
@@ -71,8 +102,8 @@ export async function GET() {
       try {
         const agentData = await orbFetch(`/computers/${cid}/agents`);
         const agentList = agentData.agents || [];
-        // Get the latest non-failed agent, or the only one
-        const active = agentList.find((a: any) => a.state !== "failed") || agentList[0];
+        const active =
+          agentList.find((a: any) => a.state !== "failed") || agentList[0];
         const state = active?.state || "unknown";
 
         if (state === "running") running++;
@@ -95,18 +126,34 @@ export async function GET() {
       }
     }
 
-    // Fetch usage
+    // Accumulate stats to disk
+    const stats = loadStats();
+    stats.total_samples++;
+    stats.sleeping_samples += sleeping;
+    stats.running_samples += running;
+    saveStats(stats);
+
+    // Calculate percentages (per-agent basis: 10 agents per sample)
+    const totalAgentSamples = stats.total_samples * 10;
+    const sleepingPct =
+      totalAgentSamples > 0
+        ? Math.round((stats.sleeping_samples / totalAgentSamples) * 100)
+        : 0;
+    const activePct = 100 - sleepingPct;
+
+    // Usage from Orb API
     const usage = await orbFetch("/usage");
-
-    // Fetch recent reviews from GitHub
-    const reviews = await fetchRecentReviews();
-
-    // Calculate cost
     const runtimeGbHours = usage.runtime_gb_hours || 0;
     const diskGbHours = usage.disk_gb_hours || 0;
     const costRuntime = runtimeGbHours * 0.005;
     const costDisk = (diskGbHours / 720) * 0.05;
     const totalCost = costRuntime + costDisk;
+
+    // Uptime
+    const uptimeMs = Date.now() - new Date(STARTED_AT).getTime();
+    const uptimeHours = Math.round((uptimeMs / 3600000) * 10) / 10;
+
+    const reviews = await fetchRecentReviews();
 
     return NextResponse.json({
       agents,
@@ -115,14 +162,17 @@ export async function GET() {
         running,
         sleeping,
         failed,
+        sleeping_pct: sleepingPct,
+        active_pct: activePct,
+        samples: stats.total_samples,
       },
       usage: {
         runtime_gb_hours: Math.round(runtimeGbHours * 100) / 100,
-        disk_gb_hours: Math.round(diskGbHours * 100) / 100,
-        checkpoint_cycles: usage.checkpoint_cycles || 0,
-        cost_today: Math.round(totalCost * 100) / 100,
+        cost_total: Math.round(totalCost * 100) / 100,
+        uptime_hours: uptimeHours,
       },
       reviews,
+      started_at: STARTED_AT,
       timestamp: new Date().toISOString(),
     });
   } catch (error: any) {

@@ -67,8 +67,11 @@ while true; do
     exit_code=$?
 
     if [ $exit_code -eq 0 ]; then
-        log "Clean exit. Sleeping before next cycle..."
-        sleep 60
+        log "Clean exit. Sleeping 5 minutes before next PR check..."
+        # This sleep is the idle window where Orb checkpoints the agent to NVMe.
+        # The agent uses zero RAM during this time. When the sleep ends (or a
+        # webhook wakes it), the next review cycle begins.
+        sleep 300
     else
         log "Crashed (exit=$exit_code). Restarting in ${BACKOFF}s..."
         sleep $BACKOFF

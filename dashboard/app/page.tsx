@@ -19,14 +19,22 @@ interface Review {
 
 interface StatusData {
   agents: Agent[];
-  stats: { total: number; running: number; sleeping: number; failed: number };
+  stats: {
+    total: number;
+    running: number;
+    sleeping: number;
+    failed: number;
+    sleeping_pct: number;
+    active_pct: number;
+    samples: number;
+  };
   usage: {
     runtime_gb_hours: number;
-    disk_gb_hours: number;
-    checkpoint_cycles: number;
-    cost_today: number;
+    cost_total: number;
+    uptime_hours: number;
   };
   reviews: Review[];
+  started_at: string;
   timestamp: string;
 }
 
@@ -148,27 +156,62 @@ export default function Home() {
 
       <main className="max-w-7xl mx-auto px-6 py-10">
         {/* Hero stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-10">
           <StatCard
             label="Computers"
             value={stats.total}
-            sub="Orb Cloud"
+            sub={`${stats.running} active, ${stats.sleeping} sleeping`}
           />
           <StatCard
-            label="Reviewing"
-            value={stats.running}
-            sub={`${stats.sleeping} sleeping`}
+            label="Active"
+            value={`${stats.active_pct}%`}
+            sub="of total time"
+          />
+          <StatCard
+            label="Sleeping"
+            value={`${stats.sleeping_pct}%`}
+            sub="zero cost"
           />
           <StatCard
             label="Cost"
-            value={`$${usage.cost_today.toFixed(2)}`}
-            sub="this billing period"
+            value={`$${usage.cost_total.toFixed(2)}`}
+            sub={`${usage.uptime_hours}h uptime`}
           />
           <StatCard
-            label="Checkpoints"
-            value={usage.checkpoint_cycles}
-            sub="sleep/wake cycles"
+            label="Reviews"
+            value={reviews.length}
+            sub="PRs reviewed"
           />
+        </div>
+
+        {/* Sleeping percentage bar */}
+        <div className="mb-10 border border-[var(--border)] rounded-xl p-5 bg-[var(--bg-card)]">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs uppercase tracking-widest text-[var(--text-tertiary)] font-mono">
+              Time allocation since start
+            </span>
+            <span className="text-xs text-[var(--text-secondary)] font-mono">
+              {stats.samples} samples
+            </span>
+          </div>
+          <div className="flex h-6 rounded-full overflow-hidden bg-[var(--bg-darkest)]">
+            <div
+              className="bg-[var(--accent-green)] transition-all duration-500"
+              style={{ width: `${stats.active_pct}%` }}
+            />
+            <div
+              className="bg-[var(--text-tertiary)] transition-all duration-500"
+              style={{ width: `${stats.sleeping_pct}%` }}
+            />
+          </div>
+          <div className="flex justify-between mt-2 text-xs font-mono">
+            <span className="text-[var(--accent-green)]">
+              Active {stats.active_pct}%
+            </span>
+            <span className="text-[var(--text-tertiary)]">
+              Sleeping {stats.sleeping_pct}% (free)
+            </span>
+          </div>
         </div>
 
         {/* Agent grid */}
