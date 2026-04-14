@@ -18,7 +18,7 @@ LLM_BASE_URL     = "https://api.z.ai/api/anthropic"
 OPENHANDS_SUPPRESS_BANNER = "1"
 
 [source]
-git    = "https://github.com/nidhishgajjar/code-review-agent"
+git    = "https://github.com/AWLSEN/code-review-agent"
 branch = "main"
 
 [build]
