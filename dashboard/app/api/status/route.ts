@@ -8,16 +8,16 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN!;
 
 // The 10 deployed computers (review@orbcloud.dev org)
 const COMPUTER_REPOS: Record<string, string> = {
-  "e8c6b32c-3f97-4021-a9d3-610b80054d72": "NousResearch/hermes-agent",
-  "65483f36-a348-4433-9c25-561b3ccdb793": "All-Hands-AI/OpenHands",
-  "a59b871b-a5de-4e5d-a808-a31f495b81ed": "langchain-ai/langchain",
-  "ed34aa01-3f53-49b6-b9a9-1fa94da66184": "vercel/next.js",
-  "79f88a34-2ae7-46b3-add8-f337206d34aa": "facebook/react",
-  "492647cb-bd1a-4add-a1b4-665891f5b8be": "nodejs/node",
-  "15a332bc-5751-4966-8d44-cb58b5dc3119": "fastapi/fastapi",
-  "ba763dca-8615-4c79-886b-0c03d5405bfb": "anthropics/anthropic-cookbook",
-  "0af7281b-3af4-4af5-8687-4b16a5923761": "huggingface/transformers",
-  "8958a1bb-1106-4cc0-b3cc-db3d0df89670": "microsoft/autogen",
+  "f0b3de5e-c23a-479e-b394-f0299d82e672": "NousResearch/hermes-agent",
+  "43fa9828-9f0a-48e8-be97-0b0889fe65f9": "All-Hands-AI/OpenHands",
+  "c7088ed0-2df7-43c0-ba38-31b89f4dabde": "langchain-ai/langchain",
+  "20785cf8-a139-462f-95d6-be7e73c5b20b": "vercel/next.js",
+  "d766498b-1db2-4613-b8f5-12ce85f5a047": "facebook/react",
+  "3420a0a4-a567-49b8-a7f7-e92e57a4f2fe": "nodejs/node",
+  "070a8e21-0489-4991-9746-3dd29b8f59d1": "fastapi/fastapi",
+  "98f4270b-9469-4419-b6c1-8ec8a372224e": "anthropics/anthropic-cookbook",
+  "939350c1-4b89-4dc9-889d-ad32dcae14ea": "huggingface/transformers",
+  "6ed8e113-b708-47a3-baab-923a723787ff": "microsoft/autogen",
 };
 
 const DATA_DIR = "/opt/review-dashboard/data";
