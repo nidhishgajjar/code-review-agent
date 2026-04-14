@@ -48,7 +48,7 @@ def api(method, path, data=None):
         "Authorization": f"Bearer {ORB_KEY}",
         "Content-Type": "application/json",
     }
-    body = json.dumps(data).encode() if data else None
+    body = json.dumps(data if data is not None else {}).encode()
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=600) as resp:
