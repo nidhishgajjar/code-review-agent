@@ -8,16 +8,16 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN!;
 
 // The 10 deployed computers (review@orbcloud.dev org)
 const COMPUTER_REPOS: Record<string, string> = {
-  "f0b3de5e-c23a-479e-b394-f0299d82e672": "NousResearch/hermes-agent",
-  "43fa9828-9f0a-48e8-be97-0b0889fe65f9": "All-Hands-AI/OpenHands",
-  "c7088ed0-2df7-43c0-ba38-31b89f4dabde": "langchain-ai/langchain",
-  "20785cf8-a139-462f-95d6-be7e73c5b20b": "vercel/next.js",
-  "d766498b-1db2-4613-b8f5-12ce85f5a047": "facebook/react",
-  "3420a0a4-a567-49b8-a7f7-e92e57a4f2fe": "nodejs/node",
-  "070a8e21-0489-4991-9746-3dd29b8f59d1": "fastapi/fastapi",
-  "98f4270b-9469-4419-b6c1-8ec8a372224e": "anthropics/anthropic-cookbook",
-  "939350c1-4b89-4dc9-889d-ad32dcae14ea": "huggingface/transformers",
-  "6ed8e113-b708-47a3-baab-923a723787ff": "microsoft/autogen",
+  "73875f64-7256-42a0-a16e-e67ae237a70c": "microsoft/autogen",
+  "dfb5e3e2-73ee-49f9-a684-0a7a439b0820": "huggingface/transformers",
+  "50b8b176-1cbd-4bcc-b753-40ca45b7c744": "anthropics/anthropic-cookbook",
+  "ea48df3f-d68c-44af-aeac-4bd3eb886e51": "fastapi/fastapi",
+  "d4aa5bf0-4d71-42f2-9ca6-e953f21d2c35": "nodejs/node",
+  "81b29ba1-de87-42c4-b71a-9689c95f7139": "facebook/react",
+  "e1c9fdbc-aaf2-4281-92ef-75ada953d3a6": "vercel/next.js",
+  "f8b3fd17-0748-480b-8b5e-d843ea169333": "langchain-ai/langchain",
+  "359d62ef-f693-4db7-a355-bc4756258777": "All-Hands-AI/OpenHands",
+  "2bd81b41-d6a7-4dc5-9da5-b913595956a0": "NousResearch/hermes-agent",
 };
 
 const DATA_DIR = "/opt/review-dashboard/data";
