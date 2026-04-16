@@ -5,7 +5,8 @@
 [agent]
 name  = "code-review-agent"
 lang  = "binary"
-entry = "src/watchdog.sh"
+entry = "/bin/bash"
+args  = ["/root/src/watchdog.sh"]
 
 [agent.env]
 HOME                    = "/root"
