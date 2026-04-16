@@ -65,10 +65,16 @@ async function orbFetch(path: string) {
   return res.json();
 }
 
-async function fetchReviewCounts(): Promise<{ total: number; byAgent: Record<string, number> }> {
-  // Read reviewed_prs.txt from each agent via Orb API
+interface ReviewEntry {
+  repo: string;
+  number: string;
+  url: string;
+  agent: string;
+}
+
+async function fetchReviewData(): Promise<{ total: number; items: ReviewEntry[] }> {
   let total = 0;
-  const byAgent: Record<string, number> = {};
+  const allItems: ReviewEntry[] = [];
 
   try {
     const computersData = await orbFetch("/computers");
@@ -80,15 +86,29 @@ async function fetchReviewCounts(): Promise<{ total: number; byAgent: Record<str
         );
         if (res.ok) {
           const text = await res.text();
-          const count = text.trim().split("\n").filter((l: string) => l.trim()).length;
-          byAgent[c.id] = count;
-          total += count;
+          const lines = text.trim().split("\n").filter((l: string) => l.trim());
+          total += lines.length;
+          for (const line of lines.slice(-10)) {
+            const parts = line.trim().split(" ");
+            if (parts.length >= 2) {
+              const repo = parts[0];
+              const prNum = parts[1].replace("PR", "");
+              allItems.push({
+                repo,
+                number: prNum,
+                url: `https://github.com/${repo}/pull/${prNum}`,
+                agent: c.name,
+              });
+            }
+          }
         }
       } catch {}
     }
   } catch {}
 
-  return { total, byAgent };
+  // Sort by PR number descending (rough proxy for recency), take last 20
+  const recent = allItems.slice(-20).reverse();
+  return { total, items: recent };
 }
 
 export async function GET() {
@@ -156,7 +176,7 @@ export async function GET() {
     const uptimeHours = Math.round((uptimeMs / 3600000) * 10) / 10;
 
     // Reviews
-    const reviewData = await fetchReviewCounts();
+    const reviewData = await fetchReviewData();
 
     // Repo pool stats
     let totalRepos = 0;
@@ -184,7 +204,7 @@ export async function GET() {
         cost_total: Math.round(totalCost * 100) / 100,
         uptime_hours: uptimeHours,
       },
-      reviews: [],
+      reviews: reviewData.items,
       total_reviews: reviewData.total,
       started_at: stats.started_at,
       timestamp: new Date().toISOString(),

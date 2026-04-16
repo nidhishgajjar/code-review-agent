@@ -12,10 +12,9 @@ interface Agent {
 
 interface Review {
   repo: string;
-  title: string;
-  number: number;
+  number: string;
   url: string;
-  updated: string;
+  agent: string;
 }
 
 interface StatusData {
@@ -267,18 +266,15 @@ export default function Home() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="text-[var(--accent-rust)] font-mono text-sm">
-                        #{review.number}
+                        PR #{review.number}
                       </span>
                       <span className="text-sm text-[var(--text-primary)] truncate max-w-md">
-                        {review.title}
+                        {review.repo}
                       </span>
                     </div>
                     <span className="text-xs text-[var(--text-tertiary)] font-mono whitespace-nowrap ml-4">
-                      {timeAgo(review.updated)}
+                      {review.agent}
                     </span>
-                  </div>
-                  <div className="mt-1 text-xs text-[var(--text-secondary)] font-mono">
-                    {review.repo}
                   </div>
                 </a>
               ))}
