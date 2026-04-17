@@ -7,12 +7,13 @@ entry = "runner.py"
 GITHUB_TOKEN = "${GITHUB_TOKEN}"
 LLM_API_KEY = "${OPENROUTER_API_KEY}"
 LLM_BASE_URL = "https://openrouter.ai/api/v1"
-LLM_MODEL = "google/gemini-2.5-flash"
+LLM_MODEL = "openrouter/google/gemini-2.5-flash"
 NUM_AGENTS = "2"
 POLL_INTERVAL = "60"
 STATE_DIR = "/agent/data/state"
 REPOS_FILE = "/agent/code/repos.txt"
 WORKDIR = "/agent/data/work"
+OPENHANDS_SUPPRESS_BANNER = "1"
 
 [source]
 git = "https://github.com/nidhishgajjar/code-review-agent"
@@ -28,8 +29,8 @@ steps = [
 base_url = "https://openrouter.ai/api/v1"
 
 [resources]
-runtime = "1GB"
-disk = "4GB"
+runtime = "2GB"
+disk = "6GB"
 
 [lifecycle]
 idle_timeout = "3600s"

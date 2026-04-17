@@ -1,0 +1,261 @@
+import grpc
+import re
+import threading
+from typing import Sequence
+from urllib.parse import urlparse, urlunparse
+from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk._logs import ReadableLogRecord
+from opentelemetry.sdk._logs.export import LogRecordExporter, LogRecordExportResult
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+    OTLPSpanExporter,
+)
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+    OTLPLogExporter,
+)
+from opentelemetry.exporter.otlp.proto.http import Compression as HTTPCompression
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+    OTLPSpanExporter as HTTPOTLPSpanExporter,
+)
+from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+    OTLPLogExporter as HTTPOTLPLogExporter,
+)
+
+from lmnr.sdk.log import get_default_logger
+from lmnr.sdk.utils import from_env, get_otel_env_var, parse_otel_headers
+
+logger = get_default_logger(__name__)
+
+
+def _configure_exporter(
+    base_url: str | None,
+    port: int | None,
+    api_key: str | None,
+    timeout_seconds: int,
+    force_http: bool,
+) -> dict:
+    """Configure common exporter settings for both span and log exporters.
+    
+    Args:
+        base_url: Base URL for the exporter
+        port: Port number for the exporter
+        api_key: API key for authentication
+        timeout_seconds: Timeout in seconds
+        force_http: Whether to force HTTP protocol
+        
+    Returns:
+        Dictionary with endpoint, headers, timeout, and force_http settings
+    """
+    url = base_url or from_env("LMNR_BASE_URL") or "https://api.lmnr.ai"
+    url = url.rstrip("/")
+    if match := re.search(r":(\d{1,5})$", url):
+        url = url[: -len(match.group(0))]
+        if port is None:
+            port = int(match.group(1))
+    if port is None:
+        port = 443 if force_http else 8443
+    final_url = f"{url}:{port or 443}"
+    api_key = api_key or from_env("LMNR_PROJECT_API_KEY")
+    endpoint = final_url
+    timeout = timeout_seconds
+    force_http_result = force_http
+    
+    if api_key:
+        headers = (
+            {"Authorization": f"Bearer {api_key}"}
+            if force_http
+            else {"authorization": f"Bearer {api_key}"}
+        )
+    else:
+        if env_headers := get_otel_env_var("HEADERS"):
+            headers = parse_otel_headers(env_headers)
+        else:
+            headers = {}
+        if env_endpoint := get_otel_env_var("ENDPOINT"):
+            if not base_url:
+                endpoint = env_endpoint
+                protocol = get_otel_env_var("PROTOCOL") or "grpc/protobuf"
+                exporter_type = from_env("OTEL_EXPORTER") or "otlp_grpc"
+                force_http_result = (
+                    protocol in ("http/protobuf", "http/json")
+                    or exporter_type == "otlp_http"
+                )
+            else:
+                logger.warning(
+                    "OTEL_ENDPOINT is set, but Laminar base URL is also set. Ignoring OTEL_ENDPOINT."
+                )
+    
+    if not endpoint:
+        raise ValueError(
+            "Laminar base URL is not set and OTEL_ENDPOINT is not set. Please either\n"
+            "- set the LMNR_BASE_URL environment variable\n"
+            "- set the OTEL_ENDPOINT environment variable\n"
+            "- pass the base_url parameter to Laminar.initialize"
+        )
+    
+    return {
+        "endpoint": endpoint,
+        "headers": headers,
+        "timeout": timeout,
+        "force_http": force_http_result,
+    }
+
+
+def _normalize_http_endpoint(endpoint: str, default_path: str) -> str:
+        """
+        Normalize HTTP endpoint URL by adding the given default path if no path is present.
+
+        Args:
+            endpoint: The endpoint URL to normalize
+
+        Returns:
+            The normalized endpoint URL with the given default path if needed
+        """
+        try:
+            parsed = urlparse(endpoint)
+            # Check if there's no path or only a trailing slash
+            if not parsed.path or parsed.path == "/":
+                # Add the given path to the endpoint
+                new_parsed = parsed._replace(path=default_path)
+                normalized_url = urlunparse(new_parsed)
+                logger.info(
+                    f"No path found in HTTP endpoint URL. "
+                    f"Adding default path {default_path}: {endpoint} -> {normalized_url}"
+                )
+                return normalized_url
+            return endpoint
+        except Exception as e:
+            logger.warning(
+                f"Failed to parse endpoint URL '{endpoint}': {e}. Using as-is."
+            )
+            return endpoint
+
+
+class LaminarSpanExporter(SpanExporter):
+    instance: OTLPSpanExporter | HTTPOTLPSpanExporter
+    endpoint: str
+    headers: dict[str, str]
+    timeout: float
+    force_http: bool
+    _instance_lock: threading.RLock
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        port: int | None = None,
+        api_key: str | None = None,
+        timeout_seconds: int = 30,
+        force_http: bool = False,
+    ):
+        self._instance_lock = threading.RLock()
+        config = _configure_exporter(base_url, port, api_key, timeout_seconds, force_http)
+        self.endpoint = config["endpoint"]
+        self.headers = config["headers"]
+        self.timeout = config["timeout"]
+        self.force_http = config["force_http"]
+        self._init_instance()
+
+    def _init_instance(self):
+        # Create new instance first (outside critical section for performance)
+        if self.force_http:
+            # Normalize HTTP endpoint to ensure it has a path
+            http_endpoint = _normalize_http_endpoint(self.endpoint, "/v1/traces")
+            new_instance = HTTPOTLPSpanExporter(
+                endpoint=http_endpoint,
+                headers=self.headers,
+                compression=HTTPCompression.Gzip,
+                timeout=self.timeout,
+            )
+        else:
+            new_instance = OTLPSpanExporter(
+                endpoint=self.endpoint,
+                headers=self.headers,
+                timeout=self.timeout,
+                compression=grpc.Compression.Gzip,
+            )
+
+        with self._instance_lock:
+            old_instance: OTLPSpanExporter | HTTPOTLPSpanExporter | None = getattr(
+                self, "instance", None
+            )
+            if old_instance is not None:
+                try:
+                    old_instance.shutdown()
+                except Exception as e:
+                    logger.warning(f"Error shutting down old exporter instance: {e}")
+            self.instance = new_instance
+
+    def export(self, spans: list[ReadableSpan]) -> SpanExportResult:
+        with self._instance_lock:
+            return self.instance.export(spans)
+
+    def shutdown(self) -> None:
+        with self._instance_lock:
+            return self.instance.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        with self._instance_lock:
+            return self.instance.force_flush(timeout_millis)
+
+class LaminarLogExporter(LogRecordExporter):
+    """Log exporter for Laminar that sends logs to the OTLP endpoint."""
+
+    instance: OTLPLogExporter | HTTPOTLPLogExporter
+    endpoint: str
+    headers: dict[str, str]
+    timeout: float
+    force_http: bool
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        port: int | None = None,
+        api_key: str | None = None,
+        timeout_seconds: int = 30,
+        force_http: bool = False,
+    ):
+        config = _configure_exporter(base_url, port, api_key, timeout_seconds, force_http)
+        self.endpoint = config["endpoint"]
+        self.headers = config["headers"]
+        self.timeout = config["timeout"]
+        self.force_http = config["force_http"]
+        self._init_instance()
+
+    def _init_instance(self):
+        # Create new instance first (outside critical section for performance)
+        if self.force_http:
+            # Normalize HTTP endpoint to ensure it has a path
+            http_endpoint = _normalize_http_endpoint(self.endpoint, "/v1/logs")
+            new_instance = HTTPOTLPLogExporter(
+                endpoint=http_endpoint,
+                headers=self.headers,
+                compression=HTTPCompression.Gzip,
+                timeout=self.timeout,
+            )
+        else:
+            new_instance = OTLPLogExporter(
+                endpoint=self.endpoint,
+                headers=self.headers,
+                timeout=self.timeout,
+                compression=grpc.Compression.Gzip,
+            )
+
+        # Atomic swap with proper cleanup
+        old_instance: OTLPLogExporter | HTTPOTLPLogExporter | None = getattr(
+            self, "instance", None
+        )
+        if old_instance is not None:
+            try:
+                old_instance.shutdown()
+            except Exception as e:
+                logger.warning(f"Error shutting down old exporter instance: {e}")
+        self.instance = new_instance
+
+    def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
+        return self.instance.export(batch)
+
+    def shutdown(self) -> None:
+        return self.instance.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self.instance.force_flush(timeout_millis)

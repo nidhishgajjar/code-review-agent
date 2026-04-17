@@ -1,0 +1,2 @@
+[pytest11]
+libtmux = libtmux.pytest_plugin
