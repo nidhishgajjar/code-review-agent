@@ -2,6 +2,7 @@
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -143,9 +144,88 @@ def changed_files(diff: str) -> list[str]:
     return files
 
 
+MANIFEST_NAMES = (
+    "pyproject.toml", "setup.py", "setup.cfg", "package.json",
+    "go.mod", "Cargo.toml", "pom.xml", "build.gradle", "build.gradle.kts",
+    "Gemfile", "composer.json", "mix.exs", "Makefile",
+)
+README_NAMES = ("README.md", "README.rst", "README.txt", "README")
+
+
+def build_project_brief(local_repo: pathlib.Path) -> str:
+    parts = []
+    for name in README_NAMES:
+        p = local_repo / name
+        if p.is_file():
+            parts.append(f"--- {name} (first 3000 chars) ---\n{p.read_text(errors='replace')[:3000]}")
+            break
+    for name in MANIFEST_NAMES:
+        p = local_repo / name
+        if p.is_file():
+            parts.append(f"--- {name} (first 1500 chars) ---\n{p.read_text(errors='replace')[:1500]}")
+    tree = []
+    try:
+        for item in sorted(local_repo.iterdir()):
+            if item.name.startswith(".") or item.name in {"node_modules", "__pycache__", "dist", "build", ".venv"}:
+                continue
+            tree.append(f"{'dir' if item.is_dir() else 'file':4}  {item.name}")
+    except Exception:
+        pass
+    if tree:
+        parts.append("--- top-level layout ---\n" + "\n".join(tree[:40]))
+    return "\n\n".join(parts)[:14_000]
+
+
+IMPORT_RE_PY = re.compile(r"^\s*(?:from\s+([.\w]+)\s+import|import\s+([.\w, ]+))", re.M)
+IMPORT_RE_JS = re.compile(r"""(?:from|require\()\s*['\"]([^'\"]+)['\"]""", re.M)
+IMPORT_RE_GO = re.compile(r"""^\s*(?:import\s+)?['\"]([\w./-]+)['\"]""", re.M)
+
+
+def extract_imports(text: str, path: str) -> list[str]:
+    out = []
+    if path.endswith(".py"):
+        for m in IMPORT_RE_PY.finditer(text):
+            if m.group(1):
+                out.append(m.group(1))
+            elif m.group(2):
+                for part in m.group(2).split(","):
+                    out.append(part.strip().split(" as ")[0])
+    elif path.endswith((".ts", ".tsx", ".js", ".jsx", ".mjs")):
+        out = [m.group(1) for m in IMPORT_RE_JS.finditer(text)]
+    elif path.endswith(".go"):
+        out = [m.group(1) for m in IMPORT_RE_GO.finditer(text)]
+    return [i for i in out if i and not i.startswith(("@", "http"))]
+
+
+def resolve_import(local_repo: pathlib.Path, module: str, origin: pathlib.Path) -> pathlib.Path | None:
+    if module.startswith("."):
+        rel = origin.parent
+        for _ in range(len(module) - len(module.lstrip("."))):
+            rel = rel.parent
+        module = module.lstrip(".")
+    parts = module.replace("/", ".").split(".")
+    bases = [local_repo, *[local_repo / "src" / p for p in ("", *parts[:-1])]]
+    suffixes = [".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs"]
+    for base in bases:
+        for s in suffixes:
+            c = base.joinpath(*parts).with_suffix(s)
+            if c.is_file():
+                return c
+        for s in suffixes:
+            c = base.joinpath(*parts, "index").with_suffix(s)
+            if c.is_file():
+                return c
+        c = base.joinpath(*parts, "__init__.py")
+        if c.is_file():
+            return c
+    return None
+
+
 def read_context(local_repo: pathlib.Path, files: list[str], per_file_limit: int = MAX_FILE_CHARS) -> str:
     out = []
     budget = 30_000
+    seen: set[str] = set()
+
     for f in files[:15]:
         p = local_repo / f
         if not p.is_file():
@@ -155,46 +235,83 @@ def read_context(local_repo: pathlib.Path, files: list[str], per_file_limit: int
         except Exception:
             continue
         snippet = text[:per_file_limit]
-        block = f"\n--- {f} (first {len(snippet)} chars) ---\n{snippet}\n"
+        block = f"\n--- {f} (changed file, first {len(snippet)} chars) ---\n{snippet}\n"
         if len(block) > budget:
             break
         out.append(block)
         budget -= len(block)
-        if budget <= 0:
+        seen.add(str(p.resolve()))
+
+    for f in files[:10]:
+        if budget < 2000:
             break
+        p = local_repo / f
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text(errors="replace")
+        except Exception:
+            continue
+        for imp in extract_imports(text, f)[:8]:
+            if budget < 2000:
+                break
+            target = resolve_import(local_repo, imp, p)
+            if target is None or str(target.resolve()) in seen:
+                continue
+            try:
+                itext = target.read_text(errors="replace")
+            except Exception:
+                continue
+            rel = target.relative_to(local_repo)
+            snippet = itext[:3500]
+            block = f"\n--- {rel} (imported by {f}, first {len(snippet)} chars) ---\n{snippet}\n"
+            if len(block) > budget:
+                continue
+            out.append(block)
+            budget -= len(block)
+            seen.add(str(target.resolve()))
     return "".join(out)
 
 
-REVIEW_PROMPT = """You are a senior code reviewer. Review this pull request.
+REVIEW_PROMPT = """You are a senior code reviewer. Your job is to give the maintainer a review that shows you actually understood the codebase — not a surface skim of the diff.
 
 Repository: {repo}
 PR #{number}: {title}
 Author: {author}
 
---- DIFF (truncated if long) ---
-{diff}
+--- PROJECT BRIEF (README, manifest, layout) ---
+{brief}
 
---- SURROUNDING CODE CONTEXT ---
+--- CODE CONTEXT (changed files + their imports) ---
 {context}
 
-Produce a review comment in markdown with these sections:
+--- DIFF ---
+{diff}
+
+Before you write anything, silently work through:
+  1. What is this project? Who uses it? What are its conventions and idioms (from the README, manifest, file layout)?
+  2. What do the changed files do today, and how do other files depend on them?
+  3. What is this PR actually trying to change? What is the author's intent?
+  4. Where could it break something — correctness, concurrency, security, API contract, performance, or a convention the codebase follows?
+
+Only after that, produce the review. Use these sections:
 
 ## Summary
-One paragraph: what this PR does.
+What this PR does and why, in the context of the project.
 
 ## Architecture
-How it fits the codebase. Any structural concerns?
+How it fits the codebase. Reference specific modules/files you saw in the context. Flag structural concerns if any.
 
 ## Issues
-Bullet list. For each: **[severity]** file:line — explanation — suggested fix. Severity is critical, warning, or suggestion. If none, write "No blocking issues found."
+Bullet list. Each: **[severity]** file:line — concrete problem — concrete fix. Severity is critical, warning, or suggestion. If none, say so — do not invent issues.
 
 ## Cross-file impact
-Anything in other files that this change affects or could break.
+Things in other files (that you saw in the imports or layout) that this change affects or could break. If nothing, say so.
 
 ## Assessment
-One of: approve / request-changes / comment. One sentence why.
+approve / request-changes / comment. One sentence why.
 
-Be specific. Cite file paths and line numbers. Be terse. Do not invent issues to fill space.
+Be specific with file paths and line numbers. Be terse — every sentence should earn its place.
 """
 
 
@@ -242,11 +359,13 @@ def review_pr(repo: str, pr: dict, local_repo: pathlib.Path, state: dict, login:
         diff = diff[:MAX_DIFF_CHARS] + "\n... [diff truncated] ...\n"
 
     files = changed_files(diff)
+    brief = build_project_brief(local_repo)
     context = read_context(local_repo, files)
+    log(f"{repo}#{number} context: brief={len(brief)}c context={len(context)}c diff={len(diff)}c files={len(files)}")
 
     prompt = REVIEW_PROMPT.format(
         repo=repo, number=number, title=pr["title"],
-        author=pr["user"]["login"], diff=diff, context=context,
+        author=pr["user"]["login"], brief=brief, diff=diff, context=context,
     )
     review = call_llm(prompt)
     footer = (
