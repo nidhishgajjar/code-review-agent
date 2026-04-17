@@ -144,183 +144,196 @@ def changed_files(diff: str) -> list[str]:
     return files
 
 
-MANIFEST_NAMES = (
-    "pyproject.toml", "setup.py", "setup.cfg", "package.json",
-    "go.mod", "Cargo.toml", "pom.xml", "build.gradle", "build.gradle.kts",
-    "Gemfile", "composer.json", "mix.exs", "Makefile",
-)
-README_NAMES = ("README.md", "README.rst", "README.txt", "README")
+SKIP_DIR_NAMES = {".git", "node_modules", "__pycache__", "dist", "build", ".venv", "vendor", "target", ".next", ".cache"}
+MAX_TOOL_OUTPUT = 12_000
+MAX_REVIEW_ROUNDS = 12
 
 
-def build_project_brief(local_repo: pathlib.Path) -> str:
-    parts = []
-    for name in README_NAMES:
-        p = local_repo / name
-        if p.is_file():
-            parts.append(f"--- {name} (first 3000 chars) ---\n{p.read_text(errors='replace')[:3000]}")
-            break
-    for name in MANIFEST_NAMES:
-        p = local_repo / name
-        if p.is_file():
-            parts.append(f"--- {name} (first 1500 chars) ---\n{p.read_text(errors='replace')[:1500]}")
-    tree = []
+def _safe_join(local_repo: pathlib.Path, sub: str) -> pathlib.Path | None:
+    sub = sub.lstrip("/").strip()
+    if not sub or sub == ".":
+        return local_repo
+    p = (local_repo / sub).resolve()
     try:
-        for item in sorted(local_repo.iterdir()):
-            if item.name.startswith(".") or item.name in {"node_modules", "__pycache__", "dist", "build", ".venv"}:
-                continue
-            tree.append(f"{'dir' if item.is_dir() else 'file':4}  {item.name}")
-    except Exception:
-        pass
-    if tree:
-        parts.append("--- top-level layout ---\n" + "\n".join(tree[:40]))
-    return "\n\n".join(parts)[:14_000]
+        p.relative_to(local_repo.resolve())
+    except ValueError:
+        return None
+    return p
 
 
-IMPORT_RE_PY = re.compile(r"^\s*(?:from\s+([.\w]+)\s+import|import\s+([.\w, ]+))", re.M)
-IMPORT_RE_JS = re.compile(r"""(?:from|require\()\s*['\"]([^'\"]+)['\"]""", re.M)
-IMPORT_RE_GO = re.compile(r"""^\s*(?:import\s+)?['\"]([\w./-]+)['\"]""", re.M)
+def tool_list_dir(local_repo: pathlib.Path, path: str) -> str:
+    p = _safe_join(local_repo, path)
+    if p is None:
+        return f"error: path '{path}' is outside the repo"
+    if not p.exists():
+        return f"error: '{path}' does not exist"
+    if not p.is_dir():
+        return f"error: '{path}' is a file, not a directory"
+    items = []
+    for item in sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name)):
+        if item.name in SKIP_DIR_NAMES:
+            continue
+        items.append(f"{'dir' if item.is_dir() else 'file'}  {item.name}")
+    return "\n".join(items[:200]) or "(empty)"
 
 
-def extract_imports(text: str, path: str) -> list[str]:
-    out = []
-    if path.endswith(".py"):
-        for m in IMPORT_RE_PY.finditer(text):
-            if m.group(1):
-                out.append(m.group(1))
-            elif m.group(2):
-                for part in m.group(2).split(","):
-                    out.append(part.strip().split(" as ")[0])
-    elif path.endswith((".ts", ".tsx", ".js", ".jsx", ".mjs")):
-        out = [m.group(1) for m in IMPORT_RE_JS.finditer(text)]
-    elif path.endswith(".go"):
-        out = [m.group(1) for m in IMPORT_RE_GO.finditer(text)]
-    return [i for i in out if i and not i.startswith(("@", "http"))]
+def tool_read_file(local_repo: pathlib.Path, path: str, offset: int = 0, limit: int = 8000) -> str:
+    p = _safe_join(local_repo, path)
+    if p is None:
+        return f"error: path '{path}' is outside the repo"
+    if not p.is_file():
+        return f"error: '{path}' is not a file"
+    try:
+        text = p.read_text(errors="replace")
+    except Exception as e:
+        return f"error reading '{path}': {e}"
+    end = offset + limit
+    chunk = text[offset:end]
+    suffix = ""
+    if end < len(text):
+        suffix = f"\n\n[file continues, {len(text) - end} more chars; call again with offset={end} to read more]"
+    if offset > 0:
+        chunk = f"[showing chars {offset}-{min(end, len(text))} of {len(text)}]\n" + chunk
+    return chunk + suffix
 
 
-def resolve_import(local_repo: pathlib.Path, module: str, origin: pathlib.Path) -> pathlib.Path | None:
-    if module.startswith("."):
-        rel = origin.parent
-        for _ in range(len(module) - len(module.lstrip("."))):
-            rel = rel.parent
-        module = module.lstrip(".")
-    parts = module.replace("/", ".").split(".")
-    bases = [local_repo, *[local_repo / "src" / p for p in ("", *parts[:-1])]]
-    suffixes = [".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs"]
-    for base in bases:
-        for s in suffixes:
-            c = base.joinpath(*parts).with_suffix(s)
-            if c.is_file():
-                return c
-        for s in suffixes:
-            c = base.joinpath(*parts, "index").with_suffix(s)
-            if c.is_file():
-                return c
-        c = base.joinpath(*parts, "__init__.py")
-        if c.is_file():
-            return c
-    return None
-
-
-def read_context(local_repo: pathlib.Path, files: list[str], per_file_limit: int = MAX_FILE_CHARS) -> str:
-    out = []
-    budget = 30_000
-    seen: set[str] = set()
-
-    for f in files[:15]:
-        p = local_repo / f
-        if not p.is_file():
+def tool_grep(local_repo: pathlib.Path, pattern: str, path: str = ".") -> str:
+    base = _safe_join(local_repo, path)
+    if base is None:
+        return f"error: path '{path}' is outside the repo"
+    if not base.exists():
+        return f"error: '{path}' does not exist"
+    try:
+        rgx = re.compile(pattern)
+    except re.error as e:
+        return f"error: bad regex: {e}"
+    targets = [base] if base.is_file() else list(base.rglob("*"))
+    matches = []
+    for f in targets:
+        if not f.is_file():
+            continue
+        if any(part in SKIP_DIR_NAMES for part in f.parts):
             continue
         try:
-            text = p.read_text(errors="replace")
+            for i, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
+                if rgx.search(line):
+                    rel = f.relative_to(local_repo)
+                    matches.append(f"{rel}:{i}: {line.strip()[:240]}")
+                    if len(matches) >= 60:
+                        return "\n".join(matches) + f"\n[stopped at 60 matches; pattern={pattern!r}]"
         except Exception:
             continue
-        snippet = text[:per_file_limit]
-        block = f"\n--- {f} (changed file, first {len(snippet)} chars) ---\n{snippet}\n"
-        if len(block) > budget:
-            break
-        out.append(block)
-        budget -= len(block)
-        seen.add(str(p.resolve()))
-
-    for f in files[:10]:
-        if budget < 2000:
-            break
-        p = local_repo / f
-        if not p.is_file():
-            continue
-        try:
-            text = p.read_text(errors="replace")
-        except Exception:
-            continue
-        for imp in extract_imports(text, f)[:8]:
-            if budget < 2000:
-                break
-            target = resolve_import(local_repo, imp, p)
-            if target is None or str(target.resolve()) in seen:
-                continue
-            try:
-                itext = target.read_text(errors="replace")
-            except Exception:
-                continue
-            rel = target.relative_to(local_repo)
-            snippet = itext[:3500]
-            block = f"\n--- {rel} (imported by {f}, first {len(snippet)} chars) ---\n{snippet}\n"
-            if len(block) > budget:
-                continue
-            out.append(block)
-            budget -= len(block)
-            seen.add(str(target.resolve()))
-    return "".join(out)
+    return "\n".join(matches) if matches else f"(no matches for {pattern!r} under {path})"
 
 
-REVIEW_PROMPT = """You are a senior code reviewer. Your job is to give the maintainer a review that shows you actually understood the codebase — not a surface skim of the diff.
+REVIEW_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_dir",
+            "description": "List entries in a repo directory. Use to discover what the project contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string", "description": "Path relative to repo root. Use '.' for root."}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file from the repo. Returns up to 8000 chars; pass offset to page further.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "offset": {"type": "integer", "description": "Char offset to start at, default 0"},
+                    "limit": {"type": "integer", "description": "Max chars to return, default 8000"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep",
+            "description": "Search the repo for a regex pattern. Returns up to 60 matches as 'path:line: snippet'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Python regex"},
+                    "path": {"type": "string", "description": "Optional sub-path to limit search. Default '.'"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_review",
+            "description": "Submit the final review markdown. Call exactly once when you're done exploring.",
+            "parameters": {
+                "type": "object",
+                "properties": {"body": {"type": "string", "description": "The full review markdown to post on the PR."}},
+                "required": ["body"],
+            },
+        },
+    },
+]
 
-Repository: {repo}
-PR #{number}: {title}
-Author: {author}
 
---- PROJECT BRIEF (README, manifest, layout) ---
-{brief}
+REVIEW_SYSTEM = """You are a senior code reviewer. You have tools to explore the repository before reviewing the PR. Use them.
 
---- CODE CONTEXT (changed files + their imports) ---
-{context}
+Approach:
+  1. Get oriented. List the repo root, find docs and config the project actually uses, read what looks load-bearing for understanding the project's purpose and conventions.
+  2. Understand the change. Read the files the diff touches in full. Follow the dependencies that matter — what imports them, what they import, where they are called.
+  3. Form a real opinion. Think about correctness, security, concurrency, API contract, performance, and the project's own conventions. Don't manufacture issues to look thorough.
+  4. When ready, call submit_review with the final markdown.
 
---- DIFF ---
-{diff}
-
-Before you write anything, silently work through:
-  1. What is this project? Who uses it? What are its conventions and idioms (from the README, manifest, file layout)?
-  2. What do the changed files do today, and how do other files depend on them?
-  3. What is this PR actually trying to change? What is the author's intent?
-  4. Where could it break something — correctness, concurrency, security, API contract, performance, or a convention the codebase follows?
-
-Only after that, produce the review. Use these sections:
+Final review markdown structure:
 
 ## Summary
 What this PR does and why, in the context of the project.
 
 ## Architecture
-How it fits the codebase. Reference specific modules/files you saw in the context. Flag structural concerns if any.
+How it fits the codebase. Reference specific files you read.
 
 ## Issues
-Bullet list. Each: **[severity]** file:line — concrete problem — concrete fix. Severity is critical, warning, or suggestion. If none, say so — do not invent issues.
+Bullet list. Each: **[severity]** path:line — concrete problem — concrete fix. severity is critical/warning/suggestion. If you found nothing, say so plainly.
 
 ## Cross-file impact
-Things in other files (that you saw in the imports or layout) that this change affects or could break. If nothing, say so.
+Things elsewhere that this change affects or could break. Reference specific files. If nothing, say so.
 
 ## Assessment
 approve / request-changes / comment. One sentence why.
 
-Be specific with file paths and line numbers. Be terse — every sentence should earn its place.
-"""
+Cite real file paths and line numbers from what you read. Be terse — every sentence earns its place. Don't include your exploration narrative in the final review."""
 
 
-def call_llm(prompt: str) -> str:
-    body = {
+REVIEW_USER = """Review this pull request.
+
+Repository: {repo}
+PR #{number}: {title}
+Author: {author}
+
+--- DIFF ---
+{diff}
+
+Explore the repo with the tools, then submit_review."""
+
+
+def call_llm_chat(messages: list[dict], tools: list[dict] | None = None) -> dict:
+    body: dict[str, Any] = {
         "model": LLM_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "temperature": 0.2,
     }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
     r = requests.post(
         f"{LLM_BASE_URL}/chat/completions",
         headers={
@@ -330,12 +343,65 @@ def call_llm(prompt: str) -> str:
             "X-Title": "code-review-agent",
         },
         json=body,
-        timeout=180,
+        timeout=240,
     )
     if r.status_code >= 400:
-        raise RuntimeError(f"LLM {r.status_code}: {r.text[:400]}")
-    data = r.json()
-    return data["choices"][0]["message"]["content"]
+        raise RuntimeError(f"LLM {r.status_code}: {r.text[:500]}")
+    return r.json()["choices"][0]["message"]
+
+
+def run_tool(local_repo: pathlib.Path, name: str, args: dict) -> str:
+    try:
+        if name == "list_dir":
+            out = tool_list_dir(local_repo, args.get("path", "."))
+        elif name == "read_file":
+            out = tool_read_file(
+                local_repo,
+                args["path"],
+                int(args.get("offset", 0) or 0),
+                int(args.get("limit", 8000) or 8000),
+            )
+        elif name == "grep":
+            out = tool_grep(local_repo, args["pattern"], args.get("path", "."))
+        else:
+            out = f"error: unknown tool '{name}'"
+    except Exception as e:
+        out = f"error executing {name}: {e}"
+    return out[:MAX_TOOL_OUTPUT]
+
+
+def generate_review_with_tools(repo: str, pr: dict, diff: str, local_repo: pathlib.Path) -> str:
+    messages: list[dict] = [
+        {"role": "system", "content": REVIEW_SYSTEM},
+        {"role": "user", "content": REVIEW_USER.format(
+            repo=repo, number=pr["number"], title=pr["title"],
+            author=pr["user"]["login"], diff=diff,
+        )},
+    ]
+    for round_idx in range(MAX_REVIEW_ROUNDS):
+        msg = call_llm_chat(messages, tools=REVIEW_TOOLS)
+        messages.append({k: v for k, v in msg.items() if k in ("role", "content", "tool_calls")})
+        tool_calls = msg.get("tool_calls") or []
+        if not tool_calls:
+            content = msg.get("content") or ""
+            if content.strip():
+                log(f"{repo}#{pr['number']} model returned content without submit_review (round {round_idx + 1}); using as review")
+                return content
+            log(f"{repo}#{pr['number']} model returned empty without tool calls (round {round_idx + 1}); nudging")
+            messages.append({"role": "user", "content": "Continue exploring, then call submit_review with the final markdown."})
+            continue
+        for tc in tool_calls:
+            name = tc["function"]["name"]
+            try:
+                args = json.loads(tc["function"].get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            log(f"{repo}#{pr['number']} round {round_idx + 1}: {name}({args})")
+            if name == "submit_review":
+                return args.get("body", "")
+            result = run_tool(local_repo, name, args)
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+    raise RuntimeError(f"review hit max rounds ({MAX_REVIEW_ROUNDS}) without submit_review")
 
 
 def post_review_comment(repo: str, pr_number: int, body: str) -> dict:
@@ -358,16 +424,9 @@ def review_pr(repo: str, pr: dict, local_repo: pathlib.Path, state: dict, login:
     if len(diff) > MAX_DIFF_CHARS:
         diff = diff[:MAX_DIFF_CHARS] + "\n... [diff truncated] ...\n"
 
-    files = changed_files(diff)
-    brief = build_project_brief(local_repo)
-    context = read_context(local_repo, files)
-    log(f"{repo}#{number} context: brief={len(brief)}c context={len(context)}c diff={len(diff)}c files={len(files)}")
-
-    prompt = REVIEW_PROMPT.format(
-        repo=repo, number=number, title=pr["title"],
-        author=pr["user"]["login"], brief=brief, diff=diff, context=context,
-    )
-    review = call_llm(prompt)
+    review = generate_review_with_tools(repo, pr, diff, local_repo)
+    if not review.strip():
+        raise RuntimeError("empty review generated")
     footer = (
         "\n\n---\n_Automated review by "
         "[code-review-agent](https://github.com/AWLSEN/code-review-agent). "
