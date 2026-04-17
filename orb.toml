@@ -10,9 +10,9 @@ LLM_BASE_URL = "https://openrouter.ai/api/v1"
 LLM_MODEL = "google/gemini-2.5-flash"
 NUM_AGENTS = "2"
 POLL_INTERVAL = "60"
-STATE_DIR = "/agent/code/state"
+STATE_DIR = "/agent/data/state"
 REPOS_FILE = "/agent/code/repos.txt"
-WORKDIR = "/agent/code/work"
+WORKDIR = "/agent/data/work"
 
 [source]
 git = "https://github.com/oaftobarkai/code-review-agent"
@@ -21,7 +21,7 @@ branch = "main"
 [build]
 steps = [
   "pip install --no-cache-dir -r requirements.txt",
-  "mkdir -p state work",
+  "mkdir -p /agent/data/state /agent/data/work",
 ]
 
 [llm]

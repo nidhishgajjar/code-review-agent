@@ -38,17 +38,23 @@ GH_HEADERS = {
 
 
 def log(msg: str) -> None:
-    print(f"[agent-{AGENT_ID}] {msg}", flush=True)
+    print(f"[agent-{AGENT_ID} pid={os.getpid()}] {msg}", flush=True)
 
 
 def load_state() -> dict[str, Any]:
     if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
+        data = json.loads(STATE_FILE.read_text())
+        log(f"loaded state from {STATE_FILE}: {len(data.get('reviewed', {}))} reviewed")
+        return data
+    log(f"no state at {STATE_FILE}, starting fresh")
     return {"reviewed": {}}
 
 
 def save_state(state: dict[str, Any]) -> None:
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    tmp = STATE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    tmp.replace(STATE_FILE)
+    log(f"saved state to {STATE_FILE} ({len(state['reviewed'])} reviewed)")
 
 
 def claim_repos() -> list[str]:
@@ -223,8 +229,10 @@ def post_review_comment(repo: str, pr_number: int, body: str) -> dict:
 def review_pr(repo: str, pr: dict, local_repo: pathlib.Path, state: dict, login: str) -> bool:
     number = pr["number"]
     if pr_already_reviewed(repo, number, state):
+        log(f"{repo}#{number} skip: in local state")
         return False
     if has_our_previous_comment(repo, number, login):
+        log(f"{repo}#{number} skip: already commented on GitHub")
         mark_reviewed(repo, number, state, pr["head"]["sha"])
         return False
 
@@ -277,13 +285,21 @@ def cycle(state: dict, login: str) -> int:
 
 
 def main() -> int:
-    log(f"starting. model={LLM_MODEL} num_agents={NUM_AGENTS} one_shot={ONE_SHOT}")
+    log(f"starting. model={LLM_MODEL} num_agents={NUM_AGENTS} one_shot={ONE_SHOT} state_dir={STATE_DIR} workdir={WORKDIR}")
     state = load_state()
     login = our_login()
     log(f"github login: {login}")
+    cycle_num = 0
     while True:
-        posted = cycle(state, login)
-        log(f"cycle done, posted={posted}")
+        cycle_num += 1
+        log(f"--- cycle {cycle_num} begin ---")
+        try:
+            posted = cycle(state, login)
+        except Exception as e:
+            log(f"cycle crashed: {e}")
+            traceback.print_exc()
+            posted = 0
+        log(f"--- cycle {cycle_num} done, posted={posted} ---")
         if ONE_SHOT:
             return 0 if posted > 0 else 2
         time.sleep(POLL_INTERVAL)
