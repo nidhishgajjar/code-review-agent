@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+Thin supervisor: start agent.py (Flask webhook server).
+If it crashes, tee logs and restart with backoff.
+"""
 import os
 import pathlib
 import signal
@@ -6,46 +10,42 @@ import subprocess
 import sys
 import time
 
-NUM_AGENTS = int(os.environ.get("NUM_AGENTS", "2"))
 LOG_DIR = pathlib.Path(os.environ.get("LOG_DIR", "/agent/data/logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_PATH = LOG_DIR / "agent.log"
 
 
-def spawn(agent_id: int) -> subprocess.Popen:
-    env = {**os.environ, "AGENT_ID": str(agent_id), "NUM_AGENTS": str(NUM_AGENTS)}
-    log_path = LOG_DIR / f"agent-{agent_id}.log"
-    log = log_path.open("ab", buffering=0)
+def spawn() -> subprocess.Popen:
+    log = LOG_PATH.open("ab", buffering=0)
     return subprocess.Popen(
         [sys.executable, "-u", "agent.py"],
-        env=env, stdout=log, stderr=subprocess.STDOUT,
+        stdout=log, stderr=subprocess.STDOUT,
     )
 
 
 def main() -> int:
-    procs = {i: spawn(i) for i in range(1, NUM_AGENTS + 1)}
-    print(f"[runner] spawned {NUM_AGENTS} agents: {list(procs.keys())}", flush=True)
+    print(f"[runner] tee -> {LOG_PATH}", flush=True)
+    proc = spawn()
 
     def shutdown(*_):
         print("[runner] shutting down", flush=True)
-        for p in procs.values():
-            p.terminate()
-        for p in procs.values():
-            try:
-                p.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                p.kill()
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
+    backoff = 2
     while True:
-        for aid, p in list(procs.items()):
-            if p.poll() is not None:
-                print(f"[runner] agent-{aid} exited code={p.returncode}, restarting in 5s", flush=True)
-                time.sleep(5)
-                procs[aid] = spawn(aid)
-        time.sleep(3)
+        rc = proc.wait()
+        print(f"[runner] agent exited code={rc}, restarting in {backoff}s", flush=True)
+        time.sleep(backoff)
+        backoff = min(backoff * 2, 60)
+        proc = spawn()
 
 
 if __name__ == "__main__":

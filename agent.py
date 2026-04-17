@@ -1,78 +1,89 @@
 #!/usr/bin/env python3
+"""
+Webhook-driven code review agent.
+
+GitHub pull_request webhook -> this Flask server (exposed via Orb public URL)
+-> OpenHands review -> comment posted back on the PR.
+
+No polling. Between webhooks the Orb sandbox freezes, so we only burn runtime
+when actually reviewing.
+"""
+import hashlib
+import hmac
 import json
 import os
 import pathlib
 import subprocess
-import sys
+import threading
 import time
 import traceback
 from typing import Any
 
 import requests
+from flask import Flask, abort, request
 
 GITHUB_API = "https://api.github.com"
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+GITHUB_WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"].encode()
 LLM_API_KEY = os.environ["LLM_API_KEY"]
-LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1")
-LLM_MODEL = os.environ.get("LLM_MODEL", "google/gemini-2.5-flash")
-AGENT_ID = int(os.environ.get("AGENT_ID", "1"))
-NUM_AGENTS = int(os.environ.get("NUM_AGENTS", "2"))
-ONE_SHOT = os.environ.get("ONE_SHOT") == "1"
-POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/anthropic")
+LLM_MODEL = os.environ.get("LLM_MODEL", "anthropic/glm-4.6")
+PORT = int(os.environ.get("PORT", "8080"))
 WORKDIR = pathlib.Path(os.environ.get("WORKDIR", "/tmp/cra-work"))
 STATE_DIR = pathlib.Path(os.environ.get("STATE_DIR", "./state"))
 REPOS_FILE = pathlib.Path(os.environ.get("REPOS_FILE", "./repos.txt"))
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
 MAX_DIFF_CHARS = 40_000
-MAX_FILE_CHARS = 6_000
 
 WORKDIR.mkdir(parents=True, exist_ok=True)
 STATE_DIR.mkdir(parents=True, exist_ok=True)
-STATE_FILE = STATE_DIR / f"agent-{AGENT_ID}.json"
+STATE_FILE = STATE_DIR / "agent.json"
+STATE_LOCK = threading.Lock()
+REVIEW_LOCK = threading.Lock()  # serialize reviews so we don't fight for RAM
 
 GH_HEADERS = {
     "Authorization": f"Bearer {GITHUB_TOKEN}",
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": f"code-review-agent/{AGENT_ID}",
+    "User-Agent": "code-review-agent",
 }
+
+TRIGGER_ACTIONS = {"opened", "reopened", "synchronize", "ready_for_review"}
 
 
 def log(msg: str) -> None:
-    print(f"[agent-{AGENT_ID} pid={os.getpid()}] {msg}", flush=True)
+    print(f"[agent pid={os.getpid()}] {msg}", flush=True)
 
 
 def load_state() -> dict[str, Any]:
-    if STATE_FILE.exists():
-        data = json.loads(STATE_FILE.read_text())
-        log(f"loaded state from {STATE_FILE}: {len(data.get('reviewed', {}))} reviewed")
-        return data
-    log(f"no state at {STATE_FILE}, starting fresh")
-    return {"reviewed": {}}
+    with STATE_LOCK:
+        if STATE_FILE.exists():
+            return json.loads(STATE_FILE.read_text())
+        return {"reviewed": {}}
 
 
 def save_state(state: dict[str, Any]) -> None:
-    tmp = STATE_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, indent=2))
-    tmp.replace(STATE_FILE)
-    log(f"saved state to {STATE_FILE} ({len(state['reviewed'])} reviewed)")
+    with STATE_LOCK:
+        tmp = STATE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        tmp.replace(STATE_FILE)
 
 
-def claim_repos() -> list[str]:
-    lines = [ln.strip() for ln in REPOS_FILE.read_text().splitlines()]
-    repos = [ln for ln in lines if ln and not ln.startswith("#")]
-    return [r for i, r in enumerate(repos) if i % NUM_AGENTS == (AGENT_ID - 1) % NUM_AGENTS]
+def allowlisted_repos() -> set[str]:
+    if not REPOS_FILE.exists():
+        return set()
+    out = set()
+    for ln in REPOS_FILE.read_text().splitlines():
+        ln = ln.strip()
+        if ln and not ln.startswith("#"):
+            out.add(ln)
+    return out
 
 
 def gh_get(url: str, params: dict | None = None) -> Any:
     r = requests.get(url, headers=GH_HEADERS, params=params, timeout=30)
     r.raise_for_status()
     return r.json()
-
-
-def gh_get_raw(url: str) -> str:
-    r = requests.get(url, headers=GH_HEADERS, timeout=30)
-    r.raise_for_status()
-    return r.text
 
 
 def gh_post(url: str, body: dict) -> Any:
@@ -105,10 +116,6 @@ def clone_or_update(repo: str) -> pathlib.Path:
     return local
 
 
-def list_open_prs(repo: str) -> list[dict]:
-    return gh_get(f"{GITHUB_API}/repos/{repo}/pulls", {"state": "open", "per_page": 20})
-
-
 def fetch_pr_diff(repo: str, number: int) -> str:
     url = f"{GITHUB_API}/repos/{repo}/pulls/{number}"
     r = requests.get(url, headers={**GH_HEADERS, "Accept": "application/vnd.github.v3.diff"}, timeout=60)
@@ -117,8 +124,7 @@ def fetch_pr_diff(repo: str, number: int) -> str:
 
 
 def pr_already_reviewed(repo: str, pr_number: int, state: dict) -> bool:
-    key = f"{repo}#{pr_number}"
-    return key in state["reviewed"]
+    return f"{repo}#{pr_number}" in state["reviewed"]
 
 
 def mark_reviewed(repo: str, pr_number: int, state: dict, sha: str) -> None:
@@ -133,14 +139,6 @@ def has_our_previous_comment(repo: str, pr_number: int, login: str) -> bool:
 
 def our_login() -> str:
     return gh_get(f"{GITHUB_API}/user")["login"]
-
-
-def changed_files(diff: str) -> list[str]:
-    files = []
-    for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            files.append(line[6:])
-    return files
 
 
 REVIEW_TASK = """You are a senior code reviewer. Review this pull request thoroughly.
@@ -192,21 +190,18 @@ def generate_review_with_openhands(repo: str, pr: dict, diff: str, local_repo: p
         model=LLM_MODEL,
         api_key=LLM_API_KEY,
         base_url=LLM_BASE_URL,
-        usage_id=f"code-review-agent/{AGENT_ID}",
+        usage_id="code-review-agent",
     )
     agent = Agent(
         llm=llm,
-        tools=[
-            Tool(name=TerminalTool.name),
-            Tool(name=FileEditorTool.name),
-        ],
+        tools=[Tool(name=TerminalTool.name), Tool(name=FileEditorTool.name)],
     )
     conversation = Conversation(agent=agent, workspace=str(local_repo))
     task = REVIEW_TASK.format(
         repo=repo, number=pr["number"], title=pr["title"],
         author=pr["user"]["login"], diff=diff,
     )
-    log(f"{repo}#{pr['number']} handing off to OpenHands agent")
+    log(f"{repo}#{pr['number']} handing off to OpenHands")
     conversation.send_message(task)
     conversation.run()
 
@@ -225,22 +220,26 @@ def post_review_comment(repo: str, pr_number: int, body: str) -> dict:
     return gh_post(url, {"body": body})
 
 
-def review_pr(repo: str, pr: dict, local_repo: pathlib.Path, state: dict, login: str) -> bool:
+def do_review(repo: str, pr: dict) -> None:
     number = pr["number"]
+    state = load_state()
+    login = our_login()
+
     if pr_already_reviewed(repo, number, state):
         log(f"{repo}#{number} skip: in local state")
-        return False
+        return
     if has_our_previous_comment(repo, number, login):
         log(f"{repo}#{number} skip: already commented on GitHub")
         mark_reviewed(repo, number, state, pr["head"]["sha"])
-        return False
+        return
 
     log(f"{repo}#{number} reviewing: {pr['title']!r}")
+    local = clone_or_update(repo)
     diff = fetch_pr_diff(repo, number)
     if len(diff) > MAX_DIFF_CHARS:
         diff = diff[:MAX_DIFF_CHARS] + "\n... [diff truncated] ...\n"
 
-    review = generate_review_with_openhands(repo, pr, diff, local_repo)
+    review = generate_review_with_openhands(repo, pr, diff, local)
     if not review.strip():
         raise RuntimeError("empty review generated")
     footer = (
@@ -251,53 +250,127 @@ def review_pr(repo: str, pr: dict, local_repo: pathlib.Path, state: dict, login:
     post_review_comment(repo, number, review.strip() + footer)
     mark_reviewed(repo, number, state, pr["head"]["sha"])
     log(f"{repo}#{number} reviewed and posted")
-    return True
 
 
-def cycle(state: dict, login: str) -> int:
-    repos = claim_repos()
-    log(f"claimed {len(repos)} repos: {repos}")
-    posted = 0
-    for repo in repos:
+def review_worker(repo: str, pr: dict) -> None:
+    with REVIEW_LOCK:
         try:
-            local = clone_or_update(repo)
-            prs = list_open_prs(repo)
-            log(f"{repo}: {len(prs)} open PRs")
-            for pr in prs:
-                try:
-                    if review_pr(repo, pr, local, state, login):
-                        posted += 1
-                        if ONE_SHOT:
-                            return posted
-                except Exception as e:
-                    log(f"{repo}#{pr['number']} error: {e}")
-                    traceback.print_exc()
+            do_review(repo, pr)
         except Exception as e:
-            log(f"{repo} error: {e}")
+            log(f"review crashed for {repo}#{pr.get('number')}: {e}")
             traceback.print_exc()
-    return posted
+
+
+app = Flask(__name__)
+
+
+def verify_signature(body: bytes, header: str | None) -> bool:
+    if not header or not header.startswith("sha256="):
+        return False
+    mac = hmac.new(GITHUB_WEBHOOK_SECRET, body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest("sha256=" + mac, header)
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "allowlist": sorted(allowlisted_repos())}
+
+
+@app.post("/webhook")
+def webhook():
+    body = request.get_data()
+    if not verify_signature(body, request.headers.get("X-Hub-Signature-256")):
+        log("webhook rejected: bad signature")
+        abort(401)
+
+    event = request.headers.get("X-GitHub-Event", "")
+    delivery = request.headers.get("X-GitHub-Delivery", "?")
+
+    if event == "ping":
+        log(f"webhook ping {delivery}")
+        return {"pong": True}
+
+    if event != "pull_request":
+        return {"ignored": event}, 202
+
+    payload = request.get_json(silent=True) or {}
+    action = payload.get("action", "")
+    pr = payload.get("pull_request") or {}
+    repo = (payload.get("repository") or {}).get("full_name", "")
+
+    if action not in TRIGGER_ACTIONS:
+        return {"ignored_action": action}, 202
+
+    if pr.get("draft"):
+        return {"ignored": "draft"}, 202
+
+    allow = allowlisted_repos()
+    if allow and repo not in allow:
+        log(f"webhook {delivery} for non-allowlisted repo {repo!r} — dropping")
+        return {"ignored": "not_allowlisted", "repo": repo}, 202
+
+    log(f"webhook {delivery} {event}.{action} {repo}#{pr.get('number')}")
+    t = threading.Thread(
+        target=review_worker,
+        args=(repo, pr),
+        name=f"review-{repo}#{pr.get('number')}",
+        daemon=True,
+    )
+    t.start()
+    return {"accepted": True, "repo": repo, "pr": pr.get("number")}, 202
+
+
+def register_webhooks_if_enabled() -> None:
+    """For each allowlisted repo, ensure a webhook points at our public URL."""
+    if not PUBLIC_URL:
+        log("PUBLIC_URL not set, skipping webhook bootstrap")
+        return
+    url = f"{PUBLIC_URL.rstrip('/')}/webhook"
+    secret = GITHUB_WEBHOOK_SECRET.decode()
+    for repo in sorted(allowlisted_repos()):
+        try:
+            hooks = gh_get(f"{GITHUB_API}/repos/{repo}/hooks", {"per_page": 100})
+        except Exception as e:
+            log(f"bootstrap: list hooks failed for {repo}: {e}")
+            continue
+        existing = next((h for h in hooks if (h.get("config") or {}).get("url") == url), None)
+        config = {"url": url, "content_type": "json", "secret": secret, "insecure_ssl": "0"}
+        if existing:
+            # ensure it's active and only subscribes to pull_request
+            try:
+                gh_post(f"{GITHUB_API}/repos/{repo}/hooks/{existing['id']}/pings", {})
+                log(f"bootstrap: {repo} hook already present (id={existing['id']}), pinged")
+            except Exception as e:
+                log(f"bootstrap: ping failed for {repo}: {e}")
+            continue
+        try:
+            created = gh_post(f"{GITHUB_API}/repos/{repo}/hooks", {
+                "name": "web",
+                "active": True,
+                "events": ["pull_request"],
+                "config": config,
+            })
+            log(f"bootstrap: created hook on {repo} id={created['id']}")
+        except Exception as e:
+            log(f"bootstrap: create hook failed for {repo}: {e}")
 
 
 def main() -> int:
-    log(f"starting. model={LLM_MODEL} num_agents={NUM_AGENTS} one_shot={ONE_SHOT} state_dir={STATE_DIR} workdir={WORKDIR}")
-    state = load_state()
-    login = our_login()
-    log(f"github login: {login}")
-    cycle_num = 0
-    while True:
-        cycle_num += 1
-        log(f"--- cycle {cycle_num} begin ---")
-        try:
-            posted = cycle(state, login)
-        except Exception as e:
-            log(f"cycle crashed: {e}")
-            traceback.print_exc()
-            posted = 0
-        log(f"--- cycle {cycle_num} done, posted={posted} ---")
-        if ONE_SHOT:
-            return 0 if posted > 0 else 2
-        time.sleep(POLL_INTERVAL)
+    log(f"starting webhook server. model={LLM_MODEL} port={PORT} public_url={PUBLIC_URL or '(unset)'}")
+    log(f"allowlist: {sorted(allowlisted_repos())}")
+    log(f"github login: {our_login()}")
+    register_webhooks_if_enabled()
+    # Use waitress if available for a production-ish WSGI server; fall back to flask dev.
+    try:
+        from waitress import serve
+        log(f"serving with waitress on 0.0.0.0:{PORT}")
+        serve(app, host="0.0.0.0", port=PORT, threads=4)
+    except ImportError:
+        log(f"waitress not installed; using flask dev server on 0.0.0.0:{PORT}")
+        app.run(host="0.0.0.0", port=PORT, threaded=True)
+    return 0
 
 
 if __name__ == "__main__":
+    import sys
     sys.exit(main())

@@ -5,14 +5,15 @@ entry = "runner.py"
 
 [agent.env]
 GITHUB_TOKEN = "${GITHUB_TOKEN}"
+GITHUB_WEBHOOK_SECRET = "${GITHUB_WEBHOOK_SECRET}"
 LLM_API_KEY = "${GLM_API_KEY}"
 LLM_BASE_URL = "https://api.z.ai/api/anthropic"
 LLM_MODEL = "anthropic/glm-4.6"
-NUM_AGENTS = "1"
-POLL_INTERVAL = "60"
+PORT = "8080"
 STATE_DIR = "/agent/data/state"
 REPOS_FILE = "/agent/code/repos.txt"
 WORKDIR = "/agent/data/work"
+PUBLIC_URL = "${PUBLIC_URL}"
 OPENHANDS_SUPPRESS_BANNER = "1"
 
 [source]
@@ -28,9 +29,12 @@ steps = [
 [llm]
 base_url = "https://api.z.ai/api/anthropic"
 
+[ports]
+expose = [8080]
+
 [resources]
 runtime = "4GB"
 disk = "6GB"
 
 [lifecycle]
-idle_timeout = "120s"
+idle_timeout = "60s"

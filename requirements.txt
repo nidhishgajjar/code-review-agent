@@ -1,3 +1,5 @@
 requests>=2.31
+flask>=3
+waitress>=3
 openhands-sdk>=1.17
 openhands-tools>=1.17
