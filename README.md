@@ -1,85 +1,70 @@
-# Orb Code Reviewer
+# AI Code Reviewer
 
-AI code review agents that sleep when idle and wake when PRs arrive.
+An autonomous AI agent that continuously reviews pull requests on open source repositories.
 
-Each agent is assigned to one open source repository. It monitors for open pull requests, reviews the code, and posts comments. When there's nothing to review, it checkpoints to disk and costs nothing.
+## What it does
 
-**Live dashboard:** [review.orbcloud.dev](https://review.orbcloud.dev)
+1. Claims open source repositories from a pool
+2. Clones each repo, understands the codebase structure
+3. Monitors for open pull requests
+4. Reviews each PR with full context — reads the diff, explores surrounding code, checks cross-file impact
+5. Posts a detailed review comment on the PR
+6. Moves on to the next repo, claims more when idle
+7. Runs forever
 
 ## How it works
 
-```
-1. PR opened on github.com/facebook/react
-2. Agent wakes from checkpoint (~1s)
-3. Fetches diff, reviews code using GLM 5.1
-4. Posts review comment on the PR
-5. Checks for more PRs
-6. No more work? Goes back to sleep. Zero cost.
-```
+The agent uses [OpenHands](https://github.com/All-Hands-AI/OpenHands) in headless mode. Each cycle:
 
-Each agent runs on [Orb Cloud](https://orbcloud.dev) as a persistent, stateful process. Orb checkpoints the entire process to NVMe when idle and restores it on demand.
+- Call a claim API to get assigned repositories
+- For each repo: `git clone`, check open PRs, fetch diffs
+- For unreviewed PRs: read the diff + surrounding code, analyze for bugs, security, performance, architecture
+- Post a review comment via GitHub API
+- Report back to the claim API
+- Sleep 30 seconds, repeat
 
-## Architecture
+The agent maintains state across cycles via session resume (`--resume`). It remembers which PRs it already reviewed and which repos it monitors.
 
-- **Runtime:** [OpenHands](https://github.com/All-Hands-AI/OpenHands) CLI in headless mode
-- **LLM:** GLM 5.1 via [Zhipu Coding Plan](https://docs.z.ai/devpack/tool/claude) (Anthropic-compatible API)
-- **Infrastructure:** [Orb Cloud](https://orbcloud.dev) - process-level checkpoint/restore
-- **Deployment:** One Orb computer per repo, 10 repos
+## Review format
 
-## Cost
+Each review comment includes:
 
-| 10 agents | Monthly |
-|-----------|---------|
-| Orb compute (5% active) | ~$7 |
-| Orb disk | ~$0.10 |
-| GLM 5.1 API | ~$3 |
-| **Total** | **~$10/mo** |
+- **Summary** — what the PR does
+- **Architecture** — how it fits the codebase
+- **Issues** — file, severity (critical/warning/suggestion), explanation, fix
+- **Cross-file impact** — anything in other files affected
+- **Assessment** — approve / request-changes / comment
 
-Sleeping agents cost $0 compute. You only pay when they're reviewing.
+## Tech stack
 
-## Deploy your own
+- **Agent runtime:** [OpenHands](https://github.com/All-Hands-AI/OpenHands) CLI (headless mode)
+- **LLM:** Any OpenAI-compatible or Anthropic-compatible model (configurable)
+- **GitHub API:** For reading PRs and posting comments
+- **Claim API:** Central coordination so multiple agents don't review the same repos
 
-```bash
-# Clone
-git clone https://github.com/awlsen/code-review-agent
-cd code-review-agent
+## Requirements
 
-# Configure
-cp .env.example .env
-# Edit .env with your keys
-
-# Deploy 10 agents
-python3 scripts/deploy.py
-
-# Or deploy for one repo
-python3 scripts/deploy.py your-org/your-repo
-```
+- OpenHands CLI installed
+- GitHub PAT with `public_repo` scope
+- LLM API key (OpenRouter, Anthropic, OpenAI, etc.)
+- Python 3.12+
 
 ## Configuration
 
-Create a `.env` file:
+Set these environment variables:
 
 ```bash
-GITHUB_TOKEN=ghp_...          # GitHub PAT with public_repo scope
-GLM_API_KEY=your-key.here     # Zhipu GLM Coding Plan API key
-ORB_API_KEY=orb_...           # Orb Cloud API key
-ORB_API_URL=https://api.orbcloud.dev/v1
+GITHUB_TOKEN=ghp_...          # GitHub PAT for reading PRs and posting comments
+LLM_MODEL=anthropic/claude-sonnet-4-20250514   # or any model
+LLM_API_KEY=sk-...            # your LLM provider API key
+LLM_BASE_URL=https://api.anthropic.com          # your LLM provider endpoint
 ```
 
-## Monitored repos
+## Running
 
-| Repo | Status |
-|------|--------|
-| NousResearch/hermes-agent | Active |
-| All-Hands-AI/OpenHands | Active |
-| langchain-ai/langchain | Active |
-| vercel/next.js | Active |
-| facebook/react | Active |
-| nodejs/node | Active |
-| fastapi/fastapi | Active |
-| anthropics/anthropic-cookbook | Active |
-| huggingface/transformers | Active |
-| microsoft/autogen | Active |
+```bash
+openhands --headless -t "You are a code review agent. Check for open PRs on the repos assigned to you, review them, post comments. Never stop."
+```
 
 ## License
 
