@@ -13,3 +13,4 @@ work-*/
 /tmp/cra-work*/
 orb.local.toml
 dashboard/.env.local
+.venv312/
