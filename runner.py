@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 import os
+import pathlib
 import signal
 import subprocess
 import sys
 import time
 
 NUM_AGENTS = int(os.environ.get("NUM_AGENTS", "2"))
+LOG_DIR = pathlib.Path(os.environ.get("LOG_DIR", "/agent/data/logs"))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def spawn(agent_id: int) -> subprocess.Popen:
     env = {**os.environ, "AGENT_ID": str(agent_id), "NUM_AGENTS": str(NUM_AGENTS)}
-    return subprocess.Popen([sys.executable, "-u", "agent.py"], env=env)
+    log_path = LOG_DIR / f"agent-{agent_id}.log"
+    log = log_path.open("ab", buffering=0)
+    return subprocess.Popen(
+        [sys.executable, "-u", "agent.py"],
+        env=env, stdout=log, stderr=subprocess.STDOUT,
+    )
 
 
 def main() -> int:
