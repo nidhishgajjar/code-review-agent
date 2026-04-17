@@ -33,4 +33,4 @@ runtime = "4GB"
 disk = "6GB"
 
 [lifecycle]
-idle_timeout = "3600s"
+idle_timeout = "120s"
