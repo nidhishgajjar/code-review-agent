@@ -29,7 +29,7 @@ steps = [
 base_url = "https://openrouter.ai/api/v1"
 
 [resources]
-runtime = "2GB"
+runtime = "4GB"
 disk = "6GB"
 
 [lifecycle]
