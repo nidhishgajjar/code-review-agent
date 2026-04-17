@@ -15,7 +15,7 @@ REPOS_FILE = "/agent/code/repos.txt"
 WORKDIR = "/agent/data/work"
 
 [source]
-git = "https://github.com/oaftobarkai/code-review-agent"
+git = "https://github.com/nidhishgajjar/code-review-agent"
 branch = "main"
 
 [build]
