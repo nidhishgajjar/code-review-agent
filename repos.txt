@@ -1,4 +1,2 @@
 # Pool of repos to review. One per line, owner/name.
-# Agents split these by AGENT_ID modulo NUM_AGENTS.
-nidhishgajjar/cra-fixture-c
-nidhishgajjar/cra-fixture-d
+nidhishgajjar/cra-fixture-e
