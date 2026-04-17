@@ -1,0 +1,7 @@
+# Pool of repos to review. One per line, owner/name.
+# Agents split these by AGENT_ID modulo NUM_AGENTS.
+# Starting small — fresh fixtures for the first Orb deployment.
+# Swap in real OSS repos (simonw/llm, astral-sh/ruff, pydantic/pydantic-ai, etc.)
+# once you're ready to review live traffic.
+oaftobarkai/cra-orb-fixture-a
+oaftobarkai/cra-orb-fixture-b

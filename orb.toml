@@ -1,0 +1,35 @@
+[agent]
+name = "code-review-agent"
+lang = "python"
+entry = "runner.py"
+
+[agent.env]
+GITHUB_TOKEN = "${GITHUB_TOKEN}"
+LLM_API_KEY = "${OPENROUTER_API_KEY}"
+LLM_BASE_URL = "https://openrouter.ai/api/v1"
+LLM_MODEL = "google/gemini-2.5-flash"
+NUM_AGENTS = "2"
+POLL_INTERVAL = "60"
+STATE_DIR = "/agent/code/state"
+REPOS_FILE = "/agent/code/repos.txt"
+WORKDIR = "/agent/code/work"
+
+[source]
+git = "https://github.com/oaftobarkai/code-review-agent"
+branch = "main"
+
+[build]
+steps = [
+  "pip install --no-cache-dir -r requirements.txt",
+  "mkdir -p state work",
+]
+
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+
+[resources]
+runtime = "1GB"
+disk = "4GB"
+
+[lifecycle]
+idle_timeout = "3600s"

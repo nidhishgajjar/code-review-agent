@@ -6,5 +6,7 @@ dist/
 build/
 .venv/
 data/
+state/
+work/
 orb.local.toml
 dashboard/.env.local
