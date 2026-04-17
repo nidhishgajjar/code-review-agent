@@ -5,9 +5,9 @@ entry = "runner.py"
 
 [agent.env]
 GITHUB_TOKEN = "${GITHUB_TOKEN}"
-LLM_API_KEY = "${OPENROUTER_API_KEY}"
-LLM_BASE_URL = "https://openrouter.ai/api/v1"
-LLM_MODEL = "openrouter/anthropic/claude-sonnet-4-5"
+LLM_API_KEY = "${GLM_API_KEY}"
+LLM_BASE_URL = "https://api.z.ai/api/anthropic"
+LLM_MODEL = "anthropic/glm-4.6"
 NUM_AGENTS = "1"
 POLL_INTERVAL = "60"
 STATE_DIR = "/agent/data/state"
@@ -26,7 +26,7 @@ steps = [
 ]
 
 [llm]
-base_url = "https://openrouter.ai/api/v1"
+base_url = "https://api.z.ai/api/anthropic"
 
 [resources]
 runtime = "4GB"
