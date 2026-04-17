@@ -1,70 +1,146 @@
-# AI Code Reviewer
+# code-review-agent
 
-An autonomous AI agent that continuously reviews pull requests on open source repositories.
+An autonomous AI agent that continuously reviews pull requests on a pool of
+GitHub repositories. Runs as a long-lived process on [Orb Cloud](https://docs.orbcloud.dev).
+Uses the official [OpenHands Software Agent SDK](https://github.com/OpenHands/software-agent-sdk)
+as its reasoning engine.
 
 ## What it does
 
-1. Claims open source repositories from a pool
-2. Clones each repo, understands the codebase structure
-3. Monitors for open pull requests
-4. Reviews each PR with full context — reads the diff, explores surrounding code, checks cross-file impact
-5. Posts a detailed review comment on the PR
-6. Moves on to the next repo, claims more when idle
-7. Runs forever
+1. Reads a list of repositories from `repos.txt`
+2. For each repo, clones it and lists open PRs via the GitHub API
+3. For any PR it has not already reviewed:
+   - Hands the diff + the cloned workspace to an OpenHands agent
+   - The agent explores the repo (bash + file-editor tools), forms an opinion,
+     and writes a review to `REVIEW.md`
+   - Posts that review as a PR comment
+4. Records the PR in a local state file, skips it on future cycles
+5. Sleeps `POLL_INTERVAL` seconds, repeats forever
 
-## How it works
+## Architecture
 
-The agent uses [OpenHands](https://github.com/All-Hands-AI/OpenHands) in headless mode. Each cycle:
+```
+                                 Orb Cloud sandbox
+                    ┌──────────────────────────────────────────┐
+                    │  runner.py  (supervises workers)         │
+                    │      │                                   │
+                    │      ▼                                   │
+                    │  agent.py  (poll loop)                   │
+                    │      │                                   │
+    GitHub API  ◀──▶│      ├─ git fetch / list PRs / post  ─▶ GitHub
+                    │      │                                   │
+                    │      ▼                                   │
+                    │  OpenHands SDK  (Agent + Conversation)   │
+                    │   ├─ TerminalTool                        │
+                    │   └─ FileEditorTool                      │
+                    │      │                                   │
+                    │      ▼                                   │
+    LLM provider ◀──│  LiteLLM  ──▶  Anthropic / OpenRouter /  │
+                    │                z.ai Coding Plan / ...    │
+                    └──────────────────────────────────────────┘
+```
 
-- Call a claim API to get assigned repositories
-- For each repo: `git clone`, check open PRs, fetch diffs
-- For unreviewed PRs: read the diff + surrounding code, analyze for bugs, security, performance, architecture
-- Post a review comment via GitHub API
-- Report back to the claim API
-- Sleep 30 seconds, repeat
-
-The agent maintains state across cycles via session resume (`--resume`). It remembers which PRs it already reviewed and which repos it monitors.
+There is no custom agent loop. All exploration, tool-use, and reasoning run
+through OpenHands. `agent.py` is a thin harness: it decides which PRs to review
+and owns the GitHub I/O; OpenHands owns the review itself.
 
 ## Review format
 
-Each review comment includes:
+Each posted review uses this structure:
 
-- **Summary** — what the PR does
-- **Architecture** — how it fits the codebase
-- **Issues** — file, severity (critical/warning/suggestion), explanation, fix
-- **Cross-file impact** — anything in other files affected
+- **Summary** — what the PR does, in project context
+- **Architecture** — how it fits, referencing specific files read
+- **Issues** — `[severity] path:line — problem — concrete fix` (critical / warning / suggestion)
+- **Cross-file impact** — what this could break elsewhere
 - **Assessment** — approve / request-changes / comment
 
-## Tech stack
+## Deduplication
 
-- **Agent runtime:** [OpenHands](https://github.com/All-Hands-AI/OpenHands) CLI (headless mode)
-- **LLM:** Any OpenAI-compatible or Anthropic-compatible model (configurable)
-- **GitHub API:** For reading PRs and posting comments
-- **Claim API:** Central coordination so multiple agents don't review the same repos
+A PR is skipped on future cycles if either is true:
+- Its `{owner/repo}#{number}` is in the local state file
+  (`$STATE_DIR/agent-{id}.json`, persisted to `/agent/data/state` on Orb)
+- There is already a comment from our GitHub login on that PR
 
-## Requirements
+The second check is the belt to the state-file's suspenders — it prevents
+duplicate posts even if the state file is lost.
 
-- OpenHands CLI installed
-- GitHub PAT with `public_repo` scope
-- LLM API key (OpenRouter, Anthropic, OpenAI, etc.)
-- Python 3.12+
+## Files in this repo
+
+- `agent.py` — poll loop, GitHub I/O, dedup, hands reviews to OpenHands
+- `runner.py` — process supervisor; respawns crashed workers, tees logs to `/agent/data/logs/`
+- `repos.txt` — the pool of `owner/name` repos to review (one per line, `#` for comments)
+- `orb.toml` — Orb Cloud deployment config (runtime, env vars, build steps, LLM provider, idle timeout)
+- `requirements.txt` — Python deps: `requests`, `openhands-sdk`, `openhands-tools`
 
 ## Configuration
 
-Set these environment variables:
+All runtime config is env vars (set from `[agent.env]` in `orb.toml`, with
+`${SECRET}` references resolved at deploy time from `org_secrets`):
+
+| Variable | Purpose |
+|---|---|
+| `GITHUB_TOKEN` | GitHub PAT with `public_repo` scope (read PRs, post comments) |
+| `LLM_API_KEY` | API key for the LLM provider |
+| `LLM_BASE_URL` | Provider base URL (e.g. `https://api.z.ai/api/anthropic`, `https://openrouter.ai/api/v1`) |
+| `LLM_MODEL` | LiteLLM-style model id (e.g. `anthropic/glm-4.6`, `openrouter/anthropic/claude-sonnet-4-5`) |
+| `NUM_AGENTS` | Number of parallel worker processes `runner.py` should spawn. Default 1 |
+| `POLL_INTERVAL` | Seconds between GitHub poll cycles. Default 60 |
+| `STATE_DIR` | Where to persist dedup state. On Orb: `/agent/data/state` |
+| `WORKDIR` | Where to clone repos. On Orb: `/agent/data/work` |
+| `REPOS_FILE` | Path to the repo pool list. Default `./repos.txt` |
+
+The LLM is called via LiteLLM inside OpenHands, so any provider LiteLLM
+supports works (Anthropic, OpenAI, OpenRouter, Google, z.ai, Groq, Together,
+DeepSeek, self-hosted, etc.).
+
+## Deploying to Orb Cloud
 
 ```bash
-GITHUB_TOKEN=ghp_...          # GitHub PAT for reading PRs and posting comments
-LLM_MODEL=anthropic/claude-sonnet-4-20250514   # or any model
-LLM_API_KEY=sk-...            # your LLM provider API key
-LLM_BASE_URL=https://api.anthropic.com          # your LLM provider endpoint
+ORB=orb_...  # your Orb API key
+
+# 1. Create a computer
+curl -sX POST https://api.orbcloud.dev/v1/computers \
+  -H "Authorization: Bearer $ORB" -H 'Content-Type: application/json' \
+  -d '{"name":"code-review-agent","runtime_mb":4096,"disk_mb":6144}'
+# save the returned {id} as CID
+
+# 2. Upload this repo's orb.toml as the config
+curl -sX POST "https://api.orbcloud.dev/v1/computers/$CID/config" \
+  -H "Authorization: Bearer $ORB" -H 'Content-Type: application/toml' \
+  --data-binary @orb.toml
+
+# 3. Build (clones this repo, installs deps)
+curl -sX POST "https://api.orbcloud.dev/v1/computers/$CID/build" \
+  -H "Authorization: Bearer $ORB" -H 'Content-Type: application/json' \
+  -d '{"org_secrets":{"GITHUB_TOKEN":"ghp_..."}}'
+
+# 4. Start the agent
+curl -sX POST "https://api.orbcloud.dev/v1/computers/$CID/agents" \
+  -H "Authorization: Bearer $ORB" -H 'Content-Type: application/json' \
+  -d '{"task":"start","org_secrets":{"GITHUB_TOKEN":"ghp_...","GLM_API_KEY":"..."}}'
 ```
 
-## Running
+To swap which repos are being reviewed: edit `repos.txt`, push, then trigger a
+rebuild (POST `/build`). The next cycle picks up the new list.
+
+## Running locally
 
 ```bash
-openhands --headless -t "You are a code review agent. Check for open PRs on the repos assigned to you, review them, post comments. Never stop."
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+export GITHUB_TOKEN=ghp_...
+export LLM_API_KEY=...
+export LLM_BASE_URL=https://api.z.ai/api/anthropic
+export LLM_MODEL=anthropic/glm-4.6
+export ONE_SHOT=1              # run one cycle and exit (else loop forever)
+export REPOS_FILE=./repos.txt
+
+.venv/bin/python -u agent.py
 ```
+
+`ONE_SHOT=1` is useful for testing a single review end-to-end. Without it,
+`agent.py` runs forever.
 
 ## License
 
