@@ -1,5 +1,3 @@
 # Repos this agent ADMINS — bootstrap registers GitHub webhooks here.
-# For OSS repos we don't admin, see oss-repos.txt (synthetic webhooks
-# from an external poller).
-
-nidhishgajjar/cra-fixture-h
+# Empty by default. Set the OWN_REPOS env var per-agent to populate at deploy time.
+# For OSS repos we don't admin, see oss-repos.txt or set OSS_REPOS env var.
