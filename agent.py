@@ -153,6 +153,8 @@ def allowlisted_repos() -> set[str]:
 
 def gh_get(url: str, params: dict | None = None) -> Any:
     r = requests.get(url, headers=GH_HEADERS, params=params, timeout=30)
+    if r.status_code >= 400:
+        log(f"GH {r.status_code} {url} body={r.text[:400]!r} headers={ {k:v for k,v in r.headers.items() if k.lower().startswith(('x-rate','x-github','retry-after'))} }")
     r.raise_for_status()
     return r.json()
 
