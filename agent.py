@@ -206,12 +206,34 @@ def mark_reviewed(repo: str, pr_number: int, state: dict, sha: str) -> None:
 
 
 def has_our_previous_comment(repo: str, pr_number: int, login: str) -> bool:
+    if not login:
+        # Login wasn't available at startup; only state.json dedup applies.
+        return False
     comments = gh_get(f"{GITHUB_API}/repos/{repo}/issues/{pr_number}/comments", {"per_page": 100})
     return any(c.get("user", {}).get("login") == login for c in comments)
 
 
+_OUR_LOGIN_CACHE: str | None = None
+
 def our_login() -> str:
-    return gh_get(f"{GITHUB_API}/user")["login"]
+    """Resolve the GitHub login the PAT belongs to. Cached for the process
+    lifetime since it never changes for a given token. Falls back to the
+    OUR_LOGIN env var if set, so startup doesn't fail on a rate-limited token.
+    """
+    global _OUR_LOGIN_CACHE
+    if _OUR_LOGIN_CACHE:
+        return _OUR_LOGIN_CACHE
+    env = os.environ.get("OUR_LOGIN", "").strip()
+    if env:
+        _OUR_LOGIN_CACHE = env
+        return env
+    try:
+        login = gh_get(f"{GITHUB_API}/user")["login"]
+        _OUR_LOGIN_CACHE = login
+        return login
+    except Exception as e:
+        log(f"our_login() failed (will retry on next webhook): {e}")
+        return ""
 
 
 REVIEW_TASK = """You are a senior code reviewer. Review this pull request thoroughly.
@@ -445,7 +467,8 @@ def main() -> int:
     log(f"env GITHUB_TOKEN={_peek('GITHUB_TOKEN')}")
     log(f"env LLM_API_KEY={_peek('LLM_API_KEY')}")
     log(f"env GITHUB_WEBHOOK_SECRET={_peek('GITHUB_WEBHOOK_SECRET')}")
-    log(f"github login: {our_login()}")
+    login = our_login()
+    log(f"github login: {login or '(deferred — rate limited or unavailable; will retry)'}")
     register_webhooks_if_enabled()
     # Use waitress if available for a production-ish WSGI server; fall back to flask dev.
     try:
