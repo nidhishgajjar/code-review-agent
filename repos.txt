@@ -1,11 +1,5 @@
-# Pool of repos this agent watches.
-# On startup the agent auto-registers a GitHub webhook on each repo.
-# Add/remove, push, then rebuild the Orb sandbox to pick up changes.
+# Repos this agent ADMINS — bootstrap registers GitHub webhooks here.
+# For OSS repos we don't admin, see oss-repos.txt (synthetic webhooks
+# from an external poller).
 
-# Test fixture (kept for ongoing smoke tests of the webhook pipeline)
 nidhishgajjar/cra-fixture-h
-
-# Real repos — under soak test the week of 2026-04-18
-nidhishgajjar/radar
-nidhishgajjar/healthcare-jobs-radar
-nidhishgajjar/scrape-plus-llm-extract-api
