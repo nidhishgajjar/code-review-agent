@@ -12,8 +12,11 @@ LLM_MODEL = "anthropic/glm-4.6"
 PORT = "8080"
 STATE_DIR = "/agent/data/state"
 REPOS_FILE = "/agent/code/repos.txt"
+OSS_REPOS_FILE = "/agent/code/oss-repos.txt"
 WORKDIR = "/agent/data/work"
 PUBLIC_URL = "${PUBLIC_URL}"
+OWN_REPOS = "${OWN_REPOS}"
+OSS_REPOS = "${OSS_REPOS}"
 OPENHANDS_SUPPRESS_BANNER = "1"
 
 [source]

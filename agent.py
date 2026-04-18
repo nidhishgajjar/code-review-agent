@@ -81,14 +81,25 @@ def _read_repo_list(path: pathlib.Path) -> list[str]:
     return out
 
 
+def _from_env(name: str) -> list[str]:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return []
+    return [r.strip() for r in raw.split(",") if r.strip()]
+
+
 def own_repos() -> list[str]:
-    """Repos we own/admin. The bootstrap registers GitHub webhooks here."""
-    return _read_repo_list(REPOS_FILE)
+    """Repos we own/admin. The bootstrap registers GitHub webhooks here.
+    Prefers OWN_REPOS env var (comma-separated), falls back to repos.txt."""
+    env = _from_env("OWN_REPOS")
+    return env if env else _read_repo_list(REPOS_FILE)
 
 
 def oss_repos() -> list[str]:
-    """OSS repos we don't admin. Pinged via synthetic webhook from an external poller."""
-    return _read_repo_list(OSS_REPOS_FILE)
+    """OSS repos we don't admin. Pinged via synthetic webhook from an external poller.
+    Prefers OSS_REPOS env var (comma-separated), falls back to oss-repos.txt."""
+    env = _from_env("OSS_REPOS")
+    return env if env else _read_repo_list(OSS_REPOS_FILE)
 
 
 def allowlisted_repos() -> set[str]:
