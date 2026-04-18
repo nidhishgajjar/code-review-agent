@@ -97,17 +97,62 @@ def _from_env(name: str) -> list[str]:
 # To re-assign: edit this map and push. The agents will pick up the new lists
 # the next time they restart (which auto-deploy will do).
 ASSIGNMENTS: dict[str, dict[str, list[str]]] = {
-    "fee58b7d": {  # code-review-agent-1 — Python
+    "fee58b7d": {  # code-review-agent-1 — Python (14 repos)
         "own": [],
-        "oss": ["simonw/datasette", "encode/httpx", "pydantic/pydantic-ai", "python-poetry/poetry"],
+        "oss": [
+            "simonw/datasette",
+            "encode/httpx",
+            "pydantic/pydantic-ai",
+            "python-poetry/poetry",
+            "tiangolo/typer",
+            "Textualize/rich",
+            "encode/starlette",
+            "pytest-dev/pytest",
+            "pyca/cryptography",
+            "python-attrs/attrs",
+            "pallets/flask",
+            "tiangolo/sqlmodel",
+            "sdispater/pendulum",
+            "samuelcolvin/watchfiles",
+        ],
     },
-    "ba6b1fa0": {  # code-review-agent-2 — Go
+    "ba6b1fa0": {  # code-review-agent-2 — Go (14 repos)
         "own": [],
-        "oss": ["charmbracelet/bubbletea", "charmbracelet/lipgloss", "caddyserver/caddy", "spf13/cobra"],
+        "oss": [
+            "charmbracelet/bubbletea",
+            "charmbracelet/lipgloss",
+            "caddyserver/caddy",
+            "spf13/cobra",
+            "gin-gonic/gin",
+            "labstack/echo",
+            "go-chi/chi",
+            "urfave/cli",
+            "spf13/viper",
+            "charmbracelet/glow",
+            "charmbracelet/gum",
+            "fatih/color",
+            "stretchr/testify",
+            "coredns/coredns",
+        ],
     },
-    "894a845c": {  # code-review-agent-3 — JS + Rust
+    "894a845c": {  # code-review-agent-3 — JS + Rust (14 repos)
         "own": [],
-        "oss": ["pmndrs/zustand", "vercel/swr", "tokio-rs/axum", "BurntSushi/ripgrep"],
+        "oss": [
+            "pmndrs/zustand",
+            "vercel/swr",
+            "tokio-rs/axum",
+            "BurntSushi/ripgrep",
+            "TanStack/query",
+            "honojs/hono",
+            "trpc/trpc",
+            "drizzle-team/drizzle-orm",
+            "radix-ui/primitives",
+            "shadcn-ui/ui",
+            "clap-rs/clap",
+            "dtolnay/anyhow",
+            "serde-rs/serde",
+            "astral-sh/uv",
+        ],
     },
 }
 
