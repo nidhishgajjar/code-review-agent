@@ -88,16 +88,61 @@ def _from_env(name: str) -> list[str]:
     return [r.strip() for r in raw.split(",") if r.strip()]
 
 
+# Per-agent repo assignment, keyed by the 8-char prefix of the Orb computer id
+# (which appears in PUBLIC_URL as https://{cid8}.orbcloud.dev). We put this in
+# code rather than env vars because Orb's `org_secrets` are scoped at the org
+# level — meaning per-agent env vars can collide across deploys. Each agent
+# reads its own PUBLIC_URL at startup and picks its slice.
+#
+# To re-assign: edit this map and push. The agents will pick up the new lists
+# the next time they restart (which auto-deploy will do).
+ASSIGNMENTS: dict[str, dict[str, list[str]]] = {
+    "fee58b7d": {  # code-review-agent-1 — Python
+        "own": [],
+        "oss": ["simonw/datasette", "encode/httpx", "pydantic/pydantic-ai", "python-poetry/poetry"],
+    },
+    "ba6b1fa0": {  # code-review-agent-2 — Go
+        "own": [],
+        "oss": ["charmbracelet/bubbletea", "charmbracelet/lipgloss", "caddyserver/caddy", "spf13/cobra"],
+    },
+    "894a845c": {  # code-review-agent-3 — JS + Rust
+        "own": [],
+        "oss": ["pmndrs/zustand", "vercel/swr", "tokio-rs/axum", "BurntSushi/ripgrep"],
+    },
+}
+
+
+def _my_cid8() -> str:
+    """Extract the 8-char Orb computer id prefix from PUBLIC_URL."""
+    if not PUBLIC_URL:
+        return ""
+    rest = PUBLIC_URL.split("//", 1)[-1]
+    return rest.split(".", 1)[0][:8]
+
+
+def _assignment(kind: str) -> list[str] | None:
+    cid8 = _my_cid8()
+    if cid8 and cid8 in ASSIGNMENTS:
+        return ASSIGNMENTS[cid8][kind]
+    return None
+
+
 def own_repos() -> list[str]:
-    """Repos we own/admin. The bootstrap registers GitHub webhooks here.
-    Prefers OWN_REPOS env var (comma-separated), falls back to repos.txt."""
+    """Repos we own/admin. Bootstrap registers GitHub webhooks here.
+    Resolution order: in-code ASSIGNMENTS (by CID), then OWN_REPOS env, then repos.txt."""
+    a = _assignment("own")
+    if a is not None:
+        return a
     env = _from_env("OWN_REPOS")
     return env if env else _read_repo_list(REPOS_FILE)
 
 
 def oss_repos() -> list[str]:
     """OSS repos we don't admin. Pinged via synthetic webhook from an external poller.
-    Prefers OSS_REPOS env var (comma-separated), falls back to oss-repos.txt."""
+    Resolution order: in-code ASSIGNMENTS (by CID), then OSS_REPOS env, then oss-repos.txt."""
+    a = _assignment("oss")
+    if a is not None:
+        return a
     env = _from_env("OSS_REPOS")
     return env if env else _read_repo_list(OSS_REPOS_FILE)
 
@@ -385,6 +430,8 @@ def register_webhooks_if_enabled() -> None:
 
 def main() -> int:
     log(f"starting webhook server. model={LLM_MODEL} port={PORT} public_url={PUBLIC_URL or '(unset)'}")
+    cid8 = _my_cid8()
+    log(f"my cid prefix: {cid8 or '(unknown)'} {'[in ASSIGNMENTS]' if cid8 in ASSIGNMENTS else '[no assignment, using env/file fallback]'}")
     log(f"own repos (bootstrap registers webhooks): {own_repos()}")
     log(f"oss repos (external poller): {oss_repos()}")
     log(f"github login: {our_login()}")
