@@ -1,0 +1,8 @@
+# OSS repos this agent reviews. Webhook is forged + signed by an external
+# poller (local launchd job for now, Orb cron later) and POSTed to /webhook
+# with the same shared secret GitHub would use.
+# Bootstrap does NOT try to register a webhook on these — we don't admin them.
+
+simonw/datasette
+encode/httpx
+charmbracelet/bubbletea

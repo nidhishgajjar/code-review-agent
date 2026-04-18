@@ -32,6 +32,7 @@ PORT = int(os.environ.get("PORT", "8080"))
 WORKDIR = pathlib.Path(os.environ.get("WORKDIR", "/tmp/cra-work"))
 STATE_DIR = pathlib.Path(os.environ.get("STATE_DIR", "./state"))
 REPOS_FILE = pathlib.Path(os.environ.get("REPOS_FILE", "./repos.txt"))
+OSS_REPOS_FILE = pathlib.Path(os.environ.get("OSS_REPOS_FILE", "./oss-repos.txt"))
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
 MAX_DIFF_CHARS = 40_000
 
@@ -69,15 +70,29 @@ def save_state(state: dict[str, Any]) -> None:
         tmp.replace(STATE_FILE)
 
 
-def allowlisted_repos() -> set[str]:
-    if not REPOS_FILE.exists():
-        return set()
-    out = set()
-    for ln in REPOS_FILE.read_text().splitlines():
+def _read_repo_list(path: pathlib.Path) -> list[str]:
+    if not path.exists():
+        return []
+    out = []
+    for ln in path.read_text().splitlines():
         ln = ln.strip()
         if ln and not ln.startswith("#"):
-            out.add(ln)
+            out.append(ln)
     return out
+
+
+def own_repos() -> list[str]:
+    """Repos we own/admin. The bootstrap registers GitHub webhooks here."""
+    return _read_repo_list(REPOS_FILE)
+
+
+def oss_repos() -> list[str]:
+    """OSS repos we don't admin. Pinged via synthetic webhook from an external poller."""
+    return _read_repo_list(OSS_REPOS_FILE)
+
+
+def allowlisted_repos() -> set[str]:
+    return set(own_repos()) | set(oss_repos())
 
 
 def gh_get(url: str, params: dict | None = None) -> Any:
@@ -321,13 +336,15 @@ def webhook():
 
 
 def register_webhooks_if_enabled() -> None:
-    """For each allowlisted repo, ensure a webhook points at our public URL."""
+    """For each owned repo, ensure a webhook points at our public URL.
+    OSS repos are intentionally skipped — we don't admin them; they get
+    synthetic webhooks from an external poller instead."""
     if not PUBLIC_URL:
         log("PUBLIC_URL not set, skipping webhook bootstrap")
         return
     url = f"{PUBLIC_URL.rstrip('/')}/webhook"
     secret = GITHUB_WEBHOOK_SECRET.decode()
-    for repo in sorted(allowlisted_repos()):
+    for repo in sorted(own_repos()):
         try:
             hooks = gh_get(f"{GITHUB_API}/repos/{repo}/hooks", {"per_page": 100})
         except Exception as e:
@@ -357,7 +374,8 @@ def register_webhooks_if_enabled() -> None:
 
 def main() -> int:
     log(f"starting webhook server. model={LLM_MODEL} port={PORT} public_url={PUBLIC_URL or '(unset)'}")
-    log(f"allowlist: {sorted(allowlisted_repos())}")
+    log(f"own repos (bootstrap registers webhooks): {own_repos()}")
+    log(f"oss repos (external poller): {oss_repos()}")
     log(f"github login: {our_login()}")
     register_webhooks_if_enabled()
     # Use waitress if available for a production-ish WSGI server; fall back to flask dev.
