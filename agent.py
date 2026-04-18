@@ -434,6 +434,15 @@ def main() -> int:
     log(f"my cid prefix: {cid8 or '(unknown)'} {'[in ASSIGNMENTS]' if cid8 in ASSIGNMENTS else '[no assignment, using env/file fallback]'}")
     log(f"own repos (bootstrap registers webhooks): {own_repos()}")
     log(f"oss repos (external poller): {oss_repos()}")
+    # Diagnostic: confirm which secrets actually made it into env (first/last chars only).
+    def _peek(k: str) -> str:
+        v = os.environ.get(k, "")
+        if not v: return "(empty)"
+        if len(v) <= 8: return f"<short:{len(v)}>"
+        return f"{v[:6]}...{v[-4:]} (len={len(v)})"
+    log(f"env GITHUB_TOKEN={_peek('GITHUB_TOKEN')}")
+    log(f"env LLM_API_KEY={_peek('LLM_API_KEY')}")
+    log(f"env GITHUB_WEBHOOK_SECRET={_peek('GITHUB_WEBHOOK_SECRET')}")
     log(f"github login: {our_login()}")
     register_webhooks_if_enabled()
     # Use waitress if available for a production-ish WSGI server; fall back to flask dev.
