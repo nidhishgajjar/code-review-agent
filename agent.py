@@ -97,7 +97,7 @@ def _from_env(name: str) -> list[str]:
 # To re-assign: edit this map and push. The agents will pick up the new lists
 # the next time they restart (which auto-deploy will do).
 ASSIGNMENTS: dict[str, dict[str, list[str]]] = {
-    "fee58b7d": {  # code-review-agent-1 — Python (14 repos)
+    "fee58b7d": {  # code-review-agent-1 — Python (24 repos)
         "own": [],
         "oss": [
             "simonw/datasette",
@@ -114,9 +114,19 @@ ASSIGNMENTS: dict[str, dict[str, list[str]]] = {
             "tiangolo/sqlmodel",
             "sdispater/pendulum",
             "samuelcolvin/watchfiles",
+            "fastapi/fastapi",
+            "astral-sh/ruff",
+            "psf/black",
+            "python/mypy",
+            "pallets/click",
+            "benoitc/gunicorn",
+            "aio-libs/aiohttp",
+            "encode/uvicorn",
+            "pre-commit/pre-commit",
+            "tox-dev/tox",
         ],
     },
-    "ba6b1fa0": {  # code-review-agent-2 — Go (14 repos)
+    "ba6b1fa0": {  # code-review-agent-2 — Go (24 repos)
         "own": [],
         "oss": [
             "charmbracelet/bubbletea",
@@ -133,9 +143,19 @@ ASSIGNMENTS: dict[str, dict[str, list[str]]] = {
             "fatih/color",
             "stretchr/testify",
             "coredns/coredns",
+            "gohugoio/hugo",
+            "traefik/traefik",
+            "nats-io/nats-server",
+            "minio/minio",
+            "prometheus/prometheus",
+            "restic/restic",
+            "syncthing/syncthing",
+            "cli/cli",
+            "google/uuid",
+            "mattn/go-sqlite3",
         ],
     },
-    "894a845c": {  # code-review-agent-3 — JS + Rust (14 repos)
+    "894a845c": {  # code-review-agent-3 — JS + Rust (24 repos)
         "own": [],
         "oss": [
             "pmndrs/zustand",
@@ -152,6 +172,16 @@ ASSIGNMENTS: dict[str, dict[str, list[str]]] = {
             "dtolnay/anyhow",
             "serde-rs/serde",
             "astral-sh/uv",
+            "vercel/turborepo",
+            "vitejs/vite",
+            "evanw/esbuild",
+            "tailwindlabs/tailwindcss",
+            "tailwindlabs/headlessui",
+            "TanStack/router",
+            "TanStack/table",
+            "prisma/prisma",
+            "nushell/nushell",
+            "typst/typst",
         ],
     },
 }
