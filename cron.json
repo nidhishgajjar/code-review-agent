@@ -6,6 +6,12 @@
       "schedule": "0 * * * *",
       "command": "cd /agent/code && python poll_self.py",
       "timeout_secs": 600
+    },
+    {
+      "name": "test-ping",
+      "schedule": "*/2 * * * *",
+      "command": "echo \"ping at $(date -u +%FT%TZ) cid=$(hostname)\"",
+      "timeout_secs": 30
     }
   ]
 }
