@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "name": "self-poll",
+      "schedule": "0 * * * *",
+      "command": "cd /agent/code && python poll_self.py",
+      "timeout_secs": 600
+    }
+  ]
+}

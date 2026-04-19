@@ -26,7 +26,8 @@ branch = "main"
 [build]
 steps = [
   "pip install --no-cache-dir -r requirements.txt",
-  "mkdir -p /agent/data/state /agent/data/work /agent/data/logs",
+  "mkdir -p /agent/data/state /agent/data/work /agent/data/logs /agent/.orb",
+  "cp cron.json /agent/.orb/cron.json",
 ]
 
 [llm]
